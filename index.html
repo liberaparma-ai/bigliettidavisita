@@ -1,0 +1,2894 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestore Biglietti da Visita OCR</title>
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <!-- Tesseract.js OCR engine CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <!-- Cropper.js per Ritaglio Manuale Interattivo -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4', 100: '#dcfce7', 500: '#22c55e', 600: '#16a34a',
+                            700: '#15803d', 800: '#166534', 900: '#14532d'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .card-shadow {
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+        }
+        .modal-backdrop {
+            background-color: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(4px);
+        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+            outline: 2px solid #10b981; outline-offset: 2px;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex flex-col">
+
+    <!-- HEADER -->
+    <header class="bg-slate-900 text-white sticky top-0 z-30 shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <div class="bg-emerald-500 text-slate-950 p-2.5 rounded-xl flex items-center justify-center font-bold">
+                    <i class="ph-bold ph-address-book text-2xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                        CardScanner <span class="bg-emerald-500/20 text-emerald-400 text-xs px-2 py-0.5 rounded-md border border-emerald-500/30">OCR Pro</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">Gestione e riconoscimento biglietti da visita</p>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <button onclick="openScanModal()" class="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-slate-950 font-semibold px-4 py-2 rounded-xl flex items-center gap-2 text-sm transition-all shadow-md">
+                    <i class="ph-bold ph-plus-circle text-lg"></i>
+                    <span>Nuovo biglietto</span>
+                </button>
+
+                <button id="driveChip" onclick="onDriveChipClick()" class="hidden bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-2 rounded-xl items-center gap-2 text-sm transition-all" title="Sincronizzazione con Google Drive">
+                    <i id="driveChipIcon" class="ph-bold ph-google-drive-logo text-lg text-sky-400"></i>
+                    <span id="driveChipText" class="text-slate-200">Collega Google Drive</span>
+                </button>
+
+                <div class="h-6 w-px bg-slate-700 hidden sm:block"></div>
+
+                <button onclick="exportFullHTML()" title="Esporta un unico file HTML con app e dati, da aprire su telefono o PC" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 border border-slate-700 px-3 py-2 rounded-xl flex items-center gap-2 text-sm transition-all">
+                    <i class="ph-bold ph-export text-lg"></i>
+                    <span class="hidden md:inline">Esporta app + dati (.html)</span>
+                    <span class="md:hidden">HTML</span>
+                </button>
+
+                <button onclick="exportJSON()" title="Esporta backup dei dati in formato JSON" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-2 rounded-xl flex items-center gap-2 text-sm transition-all">
+                    <i class="ph-bold ph-download-simple text-lg"></i>
+                    <span class="hidden lg:inline">Esporta JSON</span>
+                </button>
+
+                <label class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-2 rounded-xl flex items-center gap-2 text-sm transition-all cursor-pointer" title="Importa un backup JSON">
+                    <i class="ph-bold ph-upload-simple text-lg"></i>
+                    <span class="hidden lg:inline">Importa JSON</span>
+                    <input type="file" id="importJsonInput" accept=".json,application/json" onchange="importJSON(event)" class="hidden">
+                </label>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-grow w-full">
+
+        <!-- PROMEMORIA BACKUP -->
+        <div id="backupBanner" class="hidden mb-5 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex items-start gap-3">
+                <div class="bg-amber-100 text-amber-700 p-2 rounded-xl shrink-0">
+                    <i class="ph-bold ph-cloud-arrow-up text-xl"></i>
+                </div>
+                <div>
+                    <p class="text-sm font-bold text-amber-900">È il momento di fare un backup</p>
+                    <p id="backupBannerText" class="text-xs text-amber-800 mt-0.5 max-w-2xl"></p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+                <button onclick="snoozeBackupReminder()" class="px-3 py-2 rounded-xl text-xs font-semibold text-amber-800 hover:bg-amber-100 transition-colors">Più tardi</button>
+                <button onclick="exportJSON()" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-all">
+                    <i class="ph-bold ph-download-simple"></i> Esporta backup ora
+                </button>
+            </div>
+        </div>
+
+        <!-- SEARCH & FILTERS -->
+        <div class="bg-white rounded-2xl p-4 sm:p-5 mb-6 card-shadow border border-slate-100 flex flex-col lg:flex-row gap-4 items-stretch lg:items-center justify-between">
+            <div class="relative flex-grow max-w-lg">
+                <i class="ph-bold ph-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-lg"></i>
+                <input type="search" id="searchInput" oninput="applyFilters()" placeholder="Cerca per ditta, nome, tipo, indirizzo o città..." class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm bg-slate-50/50">
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 w-full lg:w-auto">
+                <select id="filterCategory" onchange="applyFilters()" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                    <option value="">Tutti i tipi</option>
+                </select>
+                <select id="filterCountry" onchange="applyFilters()" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                    <option value="">Tutti i Paesi</option>
+                </select>
+                <select id="filterRegion" onchange="applyFilters()" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                    <option value="">Tutte le regioni</option>
+                </select>
+                <select id="filterCity" onchange="applyFilters()" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                    <option value="">Tutte le città / province</option>
+                </select>
+            </div>
+
+            <button onclick="resetFilters()" title="Azzera filtri" class="text-slate-500 hover:text-slate-800 p-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 flex items-center justify-center transition-all">
+                <i class="ph-bold ph-arrows-counter-clockwise text-lg"></i>
+            </button>
+        </div>
+
+        <!-- STATS -->
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-4 px-1">
+            <div class="flex items-center gap-2">
+                <span id="cardsCounter" class="text-xs font-semibold text-slate-500">Mostrati 0 di 0 biglietti</span>
+                <span id="activeFiltersBadge" class="hidden text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full font-medium items-center gap-1.5">
+                    <i class="ph-fill ph-funnel"></i> Filtri attivi
+                </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span id="backupInfo" class="text-xs text-slate-500 flex items-center gap-1.5">
+                    <i class="ph-bold ph-clock-counter-clockwise text-slate-400"></i> <span>Ultimo backup: -</span>
+                </span>
+                <span id="storageInfo" class="text-xs text-slate-500 flex items-center gap-1.5 cursor-help">
+                    <i class="ph-bold ph-database text-slate-400"></i> <span>Archivio: -</span>
+                    <span id="persistBadge" class="hidden items-center gap-1 text-emerald-700" title="Il browser non cancellerà l'archivio per liberare spazio">
+                        <i class="ph-fill ph-shield-check"></i>
+                    </span>
+                </span>
+                <button onclick="optimizeAllImages()" title="Ricomprime tutte le foto già salvate alla qualità minima" class="text-xs font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-full flex items-center gap-1.5 transition-colors">
+                    <i class="ph-bold ph-arrows-in"></i> Alleggerisci foto
+                </button>
+            </div>
+        </div>
+
+        <!-- GRID -->
+        <div id="cardsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+
+        <!-- EMPTY STATE -->
+        <div id="emptyState" class="hidden flex-col items-center justify-center py-16 text-center">
+            <div class="bg-slate-100 p-4 rounded-full text-slate-400 mb-3">
+                <i class="ph-bold ph-cards text-4xl"></i>
+            </div>
+            <h3 class="text-base font-semibold text-slate-700">Nessun biglietto da visita trovato</h3>
+            <p class="text-xs text-slate-500 max-w-xs mt-1 mb-4">Aggiungi un biglietto scansionandolo oppure azzera i filtri di ricerca.</p>
+            <button onclick="openScanModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-xl text-sm transition-all flex items-center gap-2">
+                <i class="ph-bold ph-plus text-base"></i> Scansiona ora
+            </button>
+        </div>
+    </main>
+
+    <!-- ============ SCAN / EDIT MODAL ============ -->
+    <div id="scanModal" class="fixed inset-0 z-40 modal-backdrop hidden flex items-center justify-center p-3 sm:p-6">
+        <div class="bg-white rounded-2xl w-full max-w-4xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[94vh]">
+
+            <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <i class="ph-bold ph-scan text-emerald-400 text-xl"></i>
+                    <h2 id="modalTitle" class="font-bold text-lg">Nuovo biglietto da visita</h2>
+                </div>
+                <button onclick="closeScanModal()" title="Chiudi" class="text-slate-400 hover:text-white p-1 rounded-lg transition-colors">
+                    <i class="ph-bold ph-x text-xl"></i>
+                </button>
+            </div>
+
+            <div class="p-5 sm:p-6 overflow-y-auto space-y-6 flex-grow">
+
+                <!-- STEP 1: FOTO + OCR -->
+                <div class="bg-slate-50 rounded-xl p-4 border border-slate-200">
+                    <h3 class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                        <i class="ph-bold ph-camera text-base text-emerald-600"></i>
+                        Foto del biglietto (fronte e retro)
+                    </h3>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <!-- FRONTE -->
+                        <div class="flex flex-col bg-white border border-slate-200 rounded-xl p-3 hover:border-emerald-500 transition-colors min-h-[210px] justify-between">
+                            <div class="relative flex-grow flex items-center justify-center min-h-[130px] bg-slate-900/5 rounded-lg overflow-hidden">
+                                <img id="previewFront" alt="Fronte" class="hidden max-h-36 object-contain rounded-lg">
+                                <div id="placeholderFront" class="text-center p-3">
+                                    <i class="ph-bold ph-cardholder text-3xl text-slate-400"></i>
+                                    <p class="text-xs text-slate-600 mt-1 font-semibold">Fronte</p>
+                                    <p class="text-[10px] text-slate-400">Scatta o carica una foto</p>
+                                </div>
+                                <button type="button" id="removeBtnFront" onclick="setImage('front', null)" title="Rimuovi foto" class="hidden absolute top-1.5 right-1.5 bg-white/90 hover:bg-red-50 text-red-600 p-1.5 rounded-lg shadow-sm">
+                                    <i class="ph-bold ph-trash text-sm"></i>
+                                </button>
+                            </div>
+                            <div class="mt-2 flex items-center justify-center gap-1.5 pt-2 border-t border-slate-100">
+                                <button type="button" onclick="openCameraModal('front')" class="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all">
+                                    <i class="ph-bold ph-camera text-sm"></i> Fotocamera
+                                </button>
+                                <input type="file" id="cameraNativeFront" accept="image/*" capture="environment" onchange="handleImageUpload(event, 'front')" class="hidden">
+                                <label class="flex-1 py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-all">
+                                    <i class="ph-bold ph-upload-simple text-sm"></i> File
+                                    <input type="file" id="inputFront" accept="image/*" onchange="handleImageUpload(event, 'front')" class="hidden">
+                                </label>
+                                <button type="button" id="cropBtnFront" onclick="openInteractiveCropModal('front')" title="Ritaglia l'immagine" class="hidden py-1.5 px-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold rounded-lg text-xs items-center gap-1 transition-all">
+                                    <i class="ph-bold ph-crop text-sm"></i> Ritaglia
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- RETRO -->
+                        <div class="flex flex-col bg-white border border-slate-200 rounded-xl p-3 hover:border-emerald-500 transition-colors min-h-[210px] justify-between">
+                            <div class="relative flex-grow flex items-center justify-center min-h-[130px] bg-slate-900/5 rounded-lg overflow-hidden">
+                                <img id="previewBack" alt="Retro" class="hidden max-h-36 object-contain rounded-lg">
+                                <div id="placeholderBack" class="text-center p-3">
+                                    <i class="ph-bold ph-arrows-clockwise text-3xl text-slate-400"></i>
+                                    <p class="text-xs text-slate-600 mt-1 font-semibold">Retro (facoltativo)</p>
+                                    <p class="text-[10px] text-slate-400">Scatta o carica una foto</p>
+                                </div>
+                                <button type="button" id="removeBtnBack" onclick="setImage('back', null)" title="Rimuovi foto" class="hidden absolute top-1.5 right-1.5 bg-white/90 hover:bg-red-50 text-red-600 p-1.5 rounded-lg shadow-sm">
+                                    <i class="ph-bold ph-trash text-sm"></i>
+                                </button>
+                            </div>
+                            <div class="mt-2 flex items-center justify-center gap-1.5 pt-2 border-t border-slate-100">
+                                <button type="button" onclick="openCameraModal('back')" class="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all">
+                                    <i class="ph-bold ph-camera text-sm"></i> Fotocamera
+                                </button>
+                                <input type="file" id="cameraNativeBack" accept="image/*" capture="environment" onchange="handleImageUpload(event, 'back')" class="hidden">
+                                <label class="flex-1 py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-all">
+                                    <i class="ph-bold ph-upload-simple text-sm"></i> File
+                                    <input type="file" id="inputBack" accept="image/*" onchange="handleImageUpload(event, 'back')" class="hidden">
+                                </label>
+                                <button type="button" id="cropBtnBack" onclick="openInteractiveCropModal('back')" title="Ritaglia l'immagine" class="hidden py-1.5 px-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold rounded-lg text-xs items-center gap-1 transition-all">
+                                    <i class="ph-bold ph-crop text-sm"></i> Ritaglia
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+                        <p class="text-xs text-slate-500 flex items-center gap-1.5">
+                            <i class="ph-bold ph-info text-emerald-600 text-sm"></i>
+                            L'OCR legge fronte e retro. Le foto vengono salvate alleggerite, l'OCR usa la versione nitida.
+                        </p>
+                        <button type="button" id="ocrBtn" onclick="processOCR()" class="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium px-4 py-2 rounded-xl text-xs flex items-center gap-2 transition-all">
+                            <i class="ph-bold ph-lightning text-sm"></i> Leggi i dati con l'OCR
+                        </button>
+                    </div>
+
+                    <div id="ocrProgress" class="hidden mt-3 bg-white p-3 rounded-xl border border-emerald-100">
+                        <div class="flex items-center justify-between text-xs text-slate-600 mb-1">
+                            <span id="ocrStatusText" class="font-medium">Elaborazione immagine...</span>
+                            <span id="ocrPercent" class="font-bold text-emerald-600">0%</span>
+                        </div>
+                        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div id="ocrProgressBar" class="bg-emerald-500 h-full w-0 transition-all duration-200"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: DATI -->
+                <form id="cardForm" onsubmit="saveCard(event)" class="space-y-4">
+                    <input type="hidden" id="cardId">
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="bg-emerald-50/50 p-3.5 rounded-xl border border-emerald-200">
+                            <label for="company" class="block text-xs font-bold text-emerald-900 mb-1 flex items-center gap-1.5">
+                                <i class="ph-bold ph-storefront text-emerald-600 text-base"></i> Ditta / locale / insegna *
+                            </label>
+                            <input type="text" id="company" required placeholder="Es. Trattoria dei Mille, Rossi S.r.l." class="w-full px-3 py-2 rounded-xl border border-emerald-300 focus:ring-2 focus:ring-emerald-500 text-sm bg-white font-semibold text-slate-900">
+                        </div>
+
+                        <!-- TIPO DI ATTIVITÀ -->
+                        <div class="bg-emerald-50/50 p-3.5 rounded-xl border border-emerald-200">
+                            <label for="category" class="block text-xs font-bold text-emerald-900 mb-1 flex items-center gap-1.5">
+                                <i class="ph-bold ph-tag text-emerald-600 text-base"></i> Di cosa si tratta
+                            </label>
+                            <input type="text" id="category" list="categoryOptions" oninput="highlightCategoryChips()" placeholder="Es. Ristorante, Negozio, Artigiano, Amico..." class="w-full px-3 py-2 rounded-xl border border-emerald-300 focus:ring-2 focus:ring-emerald-500 text-sm bg-white font-medium">
+                            <datalist id="categoryOptions"></datalist>
+                        </div>
+
+                        <div class="md:col-span-2 -mt-2">
+                            <div id="categoryChips" class="flex flex-wrap gap-1.5"></div>
+                        </div>
+
+                        <div>
+                            <label for="personName" class="block text-xs font-semibold text-slate-700 mb-1">Nome e cognome referente</label>
+                            <input type="text" id="personName" placeholder="Es. Mario Rossi" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                        <div>
+                            <label for="role" class="block text-xs font-semibold text-slate-700 mb-1">Ruolo / titolo</label>
+                            <input type="text" id="role" placeholder="Es. Titolare, Direttore commerciale" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                        <div>
+                            <label for="phone" class="block text-xs font-semibold text-slate-700 mb-1">Telefono / cellulare</label>
+                            <input type="tel" id="phone" placeholder="Es. +39 0521 123456" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                        <div>
+                            <label for="email" class="block text-xs font-semibold text-slate-700 mb-1">Email</label>
+                            <input type="email" id="email" placeholder="Es. info@azienda.it" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label for="website" class="block text-xs font-semibold text-slate-700 mb-1">Sito web</label>
+                            <input type="text" id="website" placeholder="Es. www.azienda.it" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                    </div>
+
+                    <!-- INDIRIZZO -->
+                    <div class="border-t border-slate-200 pt-3 mt-2">
+                        <h4 class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-1.5">
+                            <i class="ph-bold ph-map-pin text-emerald-600 text-base"></i> Indirizzo
+                        </h4>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div class="md:col-span-2">
+                                <label for="street" class="block text-xs font-semibold text-slate-700 mb-1">Via / piazza / viale</label>
+                                <input type="text" id="street" placeholder="Es. Viale dei Mille, Borgo Giacomo" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label for="houseNumber" class="block text-xs font-semibold text-slate-700 mb-1">Civico</label>
+                                <input type="text" id="houseNumber" placeholder="Es. 45/A" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label for="postcode" class="block text-xs font-semibold text-slate-700 mb-1">CAP</label>
+                                <input type="text" id="postcode" inputmode="numeric" placeholder="Es. 43121" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label for="city" class="block text-xs font-semibold text-slate-700 mb-1">Città / comune</label>
+                                <input type="text" id="city" placeholder="Es. Parma" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label for="province" class="block text-xs font-semibold text-slate-700 mb-1">Provincia (sigla)</label>
+                                <input type="text" id="province" maxlength="2" placeholder="Es. PR" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm uppercase focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label for="region" class="block text-xs font-semibold text-slate-700 mb-1">Regione</label>
+                                <input type="text" id="region" placeholder="Es. Emilia-Romagna" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label for="country" class="block text-xs font-semibold text-slate-700 mb-1">Paese</label>
+                                <input type="text" id="country" value="Italia" placeholder="Es. Italia" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NOTE -->
+                    <div>
+                        <label for="notes" class="block text-xs font-semibold text-slate-700 mb-1">Note</label>
+                        <textarea id="notes" rows="3" placeholder="Es. conosciuto al Vinitaly, ottimi salumi, richiamare a gennaio..." class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500 resize-y"></textarea>
+                    </div>
+                </form>
+            </div>
+
+            <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+                <button type="button" onclick="closeScanModal()" class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-white transition-colors">Annulla</button>
+                <button type="submit" form="cardForm" id="saveBtn" class="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-semibold flex items-center gap-2 transition-all">
+                    <i class="ph-bold ph-floppy-disk text-base"></i> Salva biglietto
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ DETAIL MODAL ============ -->
+    <div id="detailModal" class="fixed inset-0 z-40 modal-backdrop hidden flex items-center justify-center p-3 sm:p-6" onclick="if (event.target === this) closeDetailModal()">
+        <div class="bg-white rounded-2xl w-full max-w-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[94vh]">
+
+            <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2 min-w-0">
+                    <i class="ph-bold ph-address-book text-emerald-400 text-xl shrink-0"></i>
+                    <h2 id="detailCompanyTitle" class="font-bold text-lg truncate">-</h2>
+                </div>
+                <button onclick="closeDetailModal()" title="Chiudi" class="text-slate-400 hover:text-white p-1 rounded-lg transition-colors shrink-0">
+                    <i class="ph-bold ph-x text-xl"></i>
+                </button>
+            </div>
+
+            <div class="p-5 sm:p-6 overflow-y-auto space-y-6">
+                <!-- Immagine -->
+                <div class="bg-slate-900 rounded-2xl p-4 flex flex-col items-center justify-center">
+                    <div class="relative w-full flex items-center justify-center min-h-[220px]">
+                        <img id="detailImg" alt="Biglietto" class="max-h-72 max-w-full object-contain rounded-lg shadow-md transition-transform duration-300">
+                    </div>
+                    <div class="flex items-center justify-between w-full mt-3 pt-3 border-t border-slate-800 text-xs">
+                        <div class="flex items-center gap-2">
+                            <button id="btnViewFront" onclick="switchDetailImage('front')" class="px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 font-bold">Fronte</button>
+                            <button id="btnViewBack" onclick="switchDetailImage('back')" class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 font-medium hover:bg-slate-700">Retro</button>
+                        </div>
+                        <button onclick="rotateDetailImg()" class="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white" title="Ruota immagine">
+                            <i class="ph-bold ph-arrow-clockwise text-base"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Dati -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+                        <span class="text-xs text-slate-400 font-semibold block">Referente e tipo</span>
+                        <p id="detailPerson" class="font-bold text-slate-800 text-base mt-0.5">-</p>
+                        <p id="detailRole" class="text-xs text-slate-500"></p>
+                        <div class="mt-2">
+                            <span id="detailCategoryBadge" class="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 font-semibold px-2.5 py-0.5 rounded-md text-xs border border-emerald-200">
+                                <i class="ph-bold ph-tag"></i>
+                                <span id="detailCategoryText">Non specificato</span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+                        <span class="text-xs text-slate-400 font-semibold block">Contatti</span>
+                        <p id="detailPhone" class="text-slate-700 mt-1 flex items-start gap-2">
+                            <i class="ph-bold ph-phone text-emerald-600 mt-0.5"></i> <span class="val">-</span>
+                        </p>
+                        <p id="detailEmail" class="text-slate-700 mt-1 flex items-start gap-2">
+                            <i class="ph-bold ph-envelope text-emerald-600 mt-0.5"></i> <span class="val">-</span>
+                        </p>
+                        <p id="detailWebsite" class="text-slate-700 mt-1 flex items-start gap-2">
+                            <i class="ph-bold ph-globe text-emerald-600 mt-0.5"></i> <span class="val">-</span>
+                        </p>
+                    </div>
+
+                    <div class="md:col-span-2 bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+                        <span class="text-xs text-slate-400 font-semibold block">Indirizzo</span>
+                        <p id="detailAddress" class="text-slate-800 font-medium mt-1 flex items-start gap-2">
+                            <i class="ph-bold ph-map-pin text-emerald-600 text-base mt-0.5"></i>
+                            <span class="val">-</span>
+                        </p>
+                    </div>
+
+                    <div id="detailNotesBox" class="md:col-span-2 bg-amber-50/60 p-3.5 rounded-xl border border-amber-200/60 hidden">
+                        <span class="text-xs text-amber-800 font-semibold block">Note</span>
+                        <p id="detailNotes" class="text-slate-700 text-sm mt-1 whitespace-pre-line"></p>
+                    </div>
+                </div>
+
+                <!-- CONDIVISIONE -->
+                <div class="bg-emerald-950/5 border border-emerald-200/60 p-4 rounded-2xl">
+                    <div class="flex items-center gap-2.5 mb-3">
+                        <div class="bg-emerald-600 text-white p-2 rounded-xl">
+                            <i class="ph-bold ph-share-network text-xl"></i>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-slate-900">Condividi il biglietto</h4>
+                            <p class="text-xs text-slate-500">Invia i dati come testo, oppure con le foto e la scheda contatto (dal telefono).</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        <button onclick="shareWhatsApp()" class="bg-[#25D366] hover:bg-[#1ebe5b] active:scale-95 text-white font-semibold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all">
+                            <i class="ph-bold ph-whatsapp-logo text-base"></i> WhatsApp
+                        </button>
+                        <button onclick="shareEmail()" class="bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-semibold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all">
+                            <i class="ph-bold ph-envelope-simple text-base"></i> Email
+                        </button>
+                        <button onclick="shareWithPhotos()" title="Apre il menu di condivisione del telefono (WhatsApp, Mail...) allegando le foto del biglietto" class="col-span-2 sm:col-span-1 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all">
+                            <i class="ph-bold ph-images text-base"></i> Invia con foto
+                        </button>
+                        <button onclick="downloadVCard()" title="Scarica il contatto in formato .vcf da aggiungere alla rubrica" class="bg-white hover:bg-slate-100 border border-slate-200 active:scale-95 text-slate-800 font-semibold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all">
+                            <i class="ph-bold ph-user-plus text-base"></i> Salva in rubrica
+                        </button>
+                        <button onclick="copyCardText()" class="bg-white hover:bg-slate-100 border border-slate-200 active:scale-95 text-slate-800 font-semibold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all">
+                            <i class="ph-bold ph-copy text-base"></i> Copia testo
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+                <button onclick="deleteCurrentCard()" class="text-red-600 hover:text-red-700 font-medium text-xs flex items-center gap-1.5 px-3 py-2 rounded-xl hover:bg-red-50">
+                    <i class="ph-bold ph-trash text-base"></i> Elimina
+                </button>
+                <div class="flex items-center gap-2">
+                    <button onclick="editCurrentCard()" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-2">
+                        <i class="ph-bold ph-pencil text-sm"></i> Modifica
+                    </button>
+                    <button onclick="closeDetailModal()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold px-4 py-2 rounded-xl">Chiudi</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST -->
+    <div id="toastContainer" class="fixed bottom-5 right-5 left-5 sm:left-auto z-[70] flex flex-col items-end gap-2 pointer-events-none"></div>
+
+    <!-- DIALOG (conferme e scelte) -->
+    <div id="confirmModal" class="fixed inset-0 z-[60] modal-backdrop hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 flex flex-col gap-4">
+            <div class="flex items-center gap-3">
+                <div class="bg-amber-100 text-amber-700 p-2.5 rounded-xl">
+                    <i class="ph-bold ph-warning text-xl"></i>
+                </div>
+                <h3 id="confirmTitle" class="font-bold text-slate-900 text-lg">Conferma</h3>
+            </div>
+            <p id="confirmMessage" class="text-sm text-slate-600 leading-relaxed"></p>
+            <div id="confirmButtons" class="flex flex-wrap items-center justify-end gap-2 pt-2"></div>
+        </div>
+    </div>
+
+    <!-- CAMERA -->
+    <div id="cameraModal" class="fixed inset-0 z-50 modal-backdrop hidden flex flex-col items-center justify-center p-3 sm:p-6">
+        <div class="bg-slate-950 rounded-2xl w-full max-w-2xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col max-h-[95vh]">
+            <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                    <i class="ph-bold ph-camera text-emerald-400 text-xl"></i>
+                    <h3 id="cameraModalTitle" class="font-semibold text-sm">Inquadra il biglietto</h3>
+                </div>
+                <button onclick="closeCameraModal()" title="Chiudi" class="text-slate-400 hover:text-white p-1 rounded-lg transition-colors">
+                    <i class="ph-bold ph-x text-xl"></i>
+                </button>
+            </div>
+            <div class="relative flex-1 bg-black flex items-center justify-center overflow-hidden min-h-[300px]">
+                <video id="cameraVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                <div class="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
+                    <div class="w-full max-w-md aspect-[1.75/1] border-2 border-dashed border-emerald-400/80 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] flex items-center justify-center">
+                        <span class="bg-slate-900/80 text-emerald-400 text-xs px-3 py-1 rounded-full border border-emerald-500/30 font-medium">Posiziona il biglietto qui</span>
+                    </div>
+                </div>
+            </div>
+            <div class="p-4 bg-slate-900 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                <button type="button" onclick="switchCameraFacing()" title="Cambia fotocamera" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all">
+                    <i class="ph-bold ph-camera-rotate text-base"></i>
+                    <span class="hidden sm:inline">Cambia</span>
+                </button>
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="useNativeCamera()" class="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all" title="Se lo schermo resta nero usa la fotocamera del telefono">
+                        <i class="ph-bold ph-device-mobile-camera text-base"></i> Fotocamera del telefono
+                    </button>
+                    <button type="button" onclick="takePictureFromCamera()" class="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg">
+                        <i class="ph-bold ph-aperture text-lg"></i> Scatta
+                    </button>
+                </div>
+                <button type="button" onclick="closeCameraModal()" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-all">Annulla</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CROP -->
+    <div id="interactiveCropModal" class="fixed inset-0 z-50 modal-backdrop hidden flex flex-col items-center justify-center p-3 sm:p-6">
+        <div class="bg-slate-900 rounded-2xl w-full max-w-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col max-h-[95vh]">
+            <div class="px-5 py-3.5 bg-slate-950 text-white flex items-center justify-between border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                    <i class="ph-bold ph-crop text-amber-400 text-xl"></i>
+                    <h3 class="font-bold text-sm">Ritaglia il biglietto</h3>
+                </div>
+                <button onclick="closeInteractiveCropModal()" title="Chiudi" class="text-slate-400 hover:text-white p-1 rounded-lg transition-colors">
+                    <i class="ph-bold ph-x text-xl"></i>
+                </button>
+            </div>
+            <div class="relative flex-1 bg-slate-950 p-4 flex items-center justify-center overflow-hidden min-h-[320px] max-h-[65vh]">
+                <div class="w-full h-full flex items-center justify-center">
+                    <img id="cropModalImage" alt="Da ritagliare" class="max-w-full max-h-full block">
+                </div>
+            </div>
+            <div class="p-4 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                    <button onclick="rotateCrop(-90)" title="Ruota a sinistra" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium flex items-center gap-1 transition-all">
+                        <i class="ph-bold ph-arrow-counter-clockwise text-base"></i><span class="hidden sm:inline">-90°</span>
+                    </button>
+                    <button onclick="rotateCrop(90)" title="Ruota a destra" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium flex items-center gap-1 transition-all">
+                        <i class="ph-bold ph-arrow-clockwise text-base"></i><span class="hidden sm:inline">+90°</span>
+                    </button>
+                    <button onclick="resetCrop()" title="Ripristina selezione" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium flex items-center gap-1">
+                        <i class="ph-bold ph-arrows-counter-clockwise text-base"></i><span class="hidden sm:inline">Ripristina</span>
+                    </button>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="closeInteractiveCropModal()" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-all">Annulla</button>
+                    <button onclick="applyInteractiveCrop()" class="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 transition-all shadow-md">
+                        <i class="ph-bold ph-check text-base"></i> Conferma ritaglio
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* =====================================================================
+           CONFIGURAZIONE
+           ===================================================================== */
+        // ⬇️ GOOGLE DRIVE: incolla tra gli apici l'"ID client" OAuth creato su Google Cloud (vedi guida).
+        //    Se resta vuoto, l'app funziona come prima, solo sul dispositivo.
+        const GOOGLE_CLIENT_ID = '';
+        const DRIVE_FOLDER_NAME = 'CardScanner - Biglietti da visita';
+
+        const STORAGE_KEY = 'card_manager_database_v2';
+        const EMBED_SEEN_KEY = 'card_manager_embedded_seen_v1';
+
+        // Foto SALVATE nell'archivio: minimo peso possibile, ma ancora leggibili a schermo.
+        // Abbassa maxSide (es. 520) o quality (es. 0.3) per file ancora più leggeri.
+        const IMG_STORE = { maxSide: 640, quality: 0.4 };
+        // Foto DI LAVORO (solo in memoria, per OCR e ritaglio): nitide, non vengono salvate.
+        const IMG_WORK = { maxSide: 1600, quality: 0.85 };
+
+        // Marcatori per l'export HTML (costruiti a pezzi per non comparire letteralmente nel sorgente)
+        const EMBED_TAG_OPEN = '<script id="' + 'embedded-data">';
+        const EMBED_TAG_RE = new RegExp(EMBED_TAG_OPEN + '[\\s\\S]*?<\\/script>\\s*');
+        const HEAD_CLOSE = '</' + 'head>';
+
+        // Copia "pulita" della pagina catturata prima che vengano disegnati i biglietti
+        const PRISTINE_HTML = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+        /* =====================================================================
+           STATO
+           ===================================================================== */
+        let cardsData = [];
+        let currentDetailCardId = null;
+        let currentDetailRotation = 0;
+        const imageState = { front: null, back: null }; // data URL di lavoro (alta qualità)
+
+        let activeCameraStream = null;
+        let activeCameraTarget = 'front';
+        let currentFacingMode = 'environment';
+        let cameraWatchdog = null;
+
+        let cropperInstance = null;
+        let activeCropTarget = 'front';
+
+        /* =====================================================================
+           DIZIONARI
+           ===================================================================== */
+        const BASE_CATEGORIES = [
+            'Ristorante / Food', 'Bar / Locale', 'Enoteca / Vino', 'Hotel / Accoglienza',
+            'Negozio / Retail', 'Artigiano / Tecnico', 'Professionista / Consulente',
+            'Fornitore / B2B', 'Giornalista / Stampa', 'Salute & Benessere', 'Servizi',
+            'Amico / Personale', 'Altro'
+        ];
+
+        // Parole chiave per suggerire il tipo di attività dopo l'OCR
+        const CATEGORY_KEYWORDS = [
+            ['Enoteca / Vino', /enoteca|cantina|\bvini\b|\bwine|winery|vitivinicol|azienda agricola|sommelier/i],
+            ['Ristorante / Food', /ristorant|trattoria|osteria|pizzeria|locanda|bistrot|gastronomi|salumeria|macelleria|panetteria|pasticceria|gelateria|\bforno\b|\bchef\b/i],
+            ['Bar / Locale', /\bbar\b|caff[eèé]\b|cocktail|\bpub\b|birreria|lounge|aperitiv/i],
+            ['Hotel / Accoglienza', /hotel|albergo|b\s?&\s?b|bed and breakfast|agriturismo|resort|residence|affittacamere/i],
+            ['Giornalista / Stampa', /giornalist|redazione|magazine|rivista|quotidiano|\bpress\b|ufficio stampa|editor/i],
+            ['Salute & Benessere', /farmacia|medic[oa]|fisioterap|estetic|parrucch|benessere|palestra|dentist|ottica|osteopat/i],
+            ['Professionista / Consulente', /\bstudio\b|avvocat|\bavv\.|commercialista|notaio|consulen|architett|\bing\.|\bgeom\.|\bdott\./i],
+            ['Artigiano / Tecnico', /idraulic|elettricist|falegnam|fabbro|\bedil|impiant|serramen|tappezz|restaur[oa]|artigian|officina|carrozzeria/i],
+            ['Negozio / Retail', /negozio|boutique|abbigliamento|\bstore\b|\bshop\b|emporio|bottega|ferramenta|libreria|profumeria/i],
+            ['Fornitore / B2B', /distribuzion|ingrosso|fornitur|logistic|import|export|s\.?\s?r\.?\s?l\.?|s\.?\s?p\.?\s?a\.?/i]
+        ];
+
+        const ITALIAN_TOPONYMS = [
+            'VIALE', 'VIA', 'PIAZZALE', 'PIAZZA', 'BORGO', 'STRADELLO', 'STRADA', 'VICOLO', 'LARGO', 'CORSO',
+            'GALLERIA', 'CONTRADA', 'LOCALITÀ', 'LOCALITA', 'LOC\\.', 'FRAZIONE', 'FRAZ\\.', 'CALATA', 'RIPA',
+            'MURA', 'FONDAMENTA', 'PASSEGGIATA', 'SALITA', 'LUNGOMARE', 'LUNGOPARMA',
+            'V\\.LE', 'P\\.ZZA', 'P\\.ZA', 'P\\.LE', 'C\\.SO', 'STR\\.'
+        ];
+        const TOPONYM_NORMALIZE = {
+            'V.LE': 'Viale', 'P.ZZA': 'Piazza', 'P.ZA': 'Piazza', 'P.LE': 'Piazzale', 'C.SO': 'Corso',
+            'STR.': 'Strada', 'LOC.': 'Località', 'FRAZ.': 'Frazione', 'LOCALITA': 'Località'
+        };
+
+        const PROVINCE_TO_REGION = {
+            'BO': 'Emilia-Romagna', 'FE': 'Emilia-Romagna', 'FC': 'Emilia-Romagna', 'MO': 'Emilia-Romagna',
+            'PR': 'Emilia-Romagna', 'PC': 'Emilia-Romagna', 'RA': 'Emilia-Romagna', 'RE': 'Emilia-Romagna', 'RN': 'Emilia-Romagna',
+            'BG': 'Lombardia', 'BS': 'Lombardia', 'CO': 'Lombardia', 'CR': 'Lombardia', 'LC': 'Lombardia',
+            'LO': 'Lombardia', 'MN': 'Lombardia', 'MI': 'Lombardia', 'MB': 'Lombardia', 'PV': 'Lombardia', 'SO': 'Lombardia', 'VA': 'Lombardia',
+            'FR': 'Lazio', 'LT': 'Lazio', 'RI': 'Lazio', 'RM': 'Lazio', 'VT': 'Lazio',
+            'AL': 'Piemonte', 'AT': 'Piemonte', 'BI': 'Piemonte', 'CN': 'Piemonte', 'NO': 'Piemonte', 'TO': 'Piemonte', 'VB': 'Piemonte', 'VC': 'Piemonte',
+            'BL': 'Veneto', 'PD': 'Veneto', 'RO': 'Veneto', 'TV': 'Veneto', 'VE': 'Veneto', 'VR': 'Veneto', 'VI': 'Veneto',
+            'AR': 'Toscana', 'FI': 'Toscana', 'GR': 'Toscana', 'LI': 'Toscana', 'LU': 'Toscana', 'MS': 'Toscana', 'PI': 'Toscana', 'PT': 'Toscana', 'PO': 'Toscana', 'SI': 'Toscana',
+            'AV': 'Campania', 'BN': 'Campania', 'CE': 'Campania', 'NA': 'Campania', 'SA': 'Campania',
+            'AG': 'Sicilia', 'CL': 'Sicilia', 'CT': 'Sicilia', 'EN': 'Sicilia', 'ME': 'Sicilia', 'PA': 'Sicilia', 'RG': 'Sicilia', 'SR': 'Sicilia', 'TP': 'Sicilia',
+            'BA': 'Puglia', 'BT': 'Puglia', 'BR': 'Puglia', 'FG': 'Puglia', 'LE': 'Puglia', 'TA': 'Puglia',
+            'GE': 'Liguria', 'IM': 'Liguria', 'SP': 'Liguria', 'SV': 'Liguria',
+            'AN': 'Marche', 'AP': 'Marche', 'FM': 'Marche', 'MC': 'Marche', 'PU': 'Marche',
+            'CH': 'Abruzzo', 'AQ': 'Abruzzo', 'PE': 'Abruzzo', 'TE': 'Abruzzo',
+            'GO': 'Friuli-Venezia Giulia', 'PN': 'Friuli-Venezia Giulia', 'TS': 'Friuli-Venezia Giulia', 'UD': 'Friuli-Venezia Giulia',
+            'BZ': 'Trentino-Alto Adige', 'TN': 'Trentino-Alto Adige',
+            'PG': 'Umbria', 'TR': 'Umbria',
+            'CA': 'Sardegna', 'SU': 'Sardegna', 'NU': 'Sardegna', 'OR': 'Sardegna', 'SS': 'Sardegna',
+            'CZ': 'Calabria', 'CS': 'Calabria', 'KR': 'Calabria', 'RC': 'Calabria', 'VV': 'Calabria',
+            'MT': 'Basilicata', 'PZ': 'Basilicata',
+            'CB': 'Molise', 'IS': 'Molise',
+            'AO': "Valle d'Aosta"
+        };
+
+        const CITY_TO_PROVINCE = {
+            'parma': 'PR', 'milano': 'MI', 'roma': 'RM', 'torino': 'TO', 'napoli': 'NA',
+            'bologna': 'BO', 'firenze': 'FI', 'venezia': 'VE', 'genova': 'GE', 'bari': 'BA',
+            'palermo': 'PA', 'catania': 'CT', 'verona': 'VR', 'padova': 'PD', 'trieste': 'TS',
+            'brescia': 'BS', 'modena': 'MO', 'reggio emilia': 'RE', "reggio nell'emilia": 'RE',
+            'piacenza': 'PC', 'ferrara': 'FE', 'ravenna': 'RA', 'forlì': 'FC', 'cesena': 'FC',
+            'rimini': 'RN', 'bergamo': 'BG', 'monza': 'MB', 'pisa': 'PI', 'livorno': 'LI',
+            'perugia': 'PG', 'ancona': 'AN', 'cagliari': 'CA', 'trento': 'TN', 'bolzano': 'BZ',
+            'fidenza': 'PR', 'salsomaggiore terme': 'PR', 'langhirano': 'PR', 'collecchio': 'PR',
+            'cremona': 'CR', 'mantova': 'MN', 'la spezia': 'SP', 'lucca': 'LU', 'siena': 'SI'
+        };
+
+        const DEMO_CARDS = [
+            {
+                id: 'demo-1', company: 'Trattoria dei Mille', category: 'Ristorante / Food',
+                personName: 'Giuseppe Garibaldi', role: 'Titolare & Chef', phone: '+39 0521 987654',
+                email: 'info@trattoriadeimille.it', website: 'www.trattoriadeimille.it',
+                street: 'Viale dei Mille', houseNumber: '42', postcode: '43125', city: 'Parma', province: 'PR',
+                region: 'Emilia-Romagna', country: 'Italia', notes: 'Specialità cucina parmigiana tipica, anolini e salumi.',
+                frontImg: 'https://placehold.co/600x350/1e293b/22c55e?text=Trattoria+dei+Mille', backImg: '', updatedAt: 1
+            },
+            {
+                id: 'demo-2', company: 'Boutique Borgo Oltretorrente', category: 'Negozio / Retail',
+                personName: 'Elena Rossi', role: 'Direttrice', phone: '+39 0521 234567',
+                email: 'elena@boutiqueborgo.it', website: 'www.boutiqueborgo.it',
+                street: 'Borgo Giacomo Tommasini', houseNumber: '15/B', postcode: '43121', city: 'Parma', province: 'PR',
+                region: 'Emilia-Romagna', country: 'Italia', notes: 'Abbigliamento artigianale e accessori.',
+                frontImg: 'https://placehold.co/600x350/0f172a/38bdf8?text=Boutique+Borgo', backImg: '', updatedAt: 1
+            },
+            {
+                id: 'demo-3', company: 'Piazzale Garibaldi Caffè', category: 'Bar / Locale',
+                personName: 'Marco Bianchi', role: 'Bar manager', phone: '+39 02 889900',
+                email: 'bar@garibaldicaffe.it', website: 'www.garibaldicaffe.it',
+                street: 'Piazzale Luigi Cadorna', houseNumber: '3', postcode: '20123', city: 'Milano', province: 'MI',
+                region: 'Lombardia', country: 'Italia', notes: 'Aperitivi e colazioni di lavoro.',
+                frontImg: 'https://placehold.co/600x350/334155/f59e0b?text=Piazzale+Caffe', backImg: '', updatedAt: 1
+            }
+        ];
+
+        /* =====================================================================
+           AVVIO
+           ===================================================================== */
+        window.addEventListener('DOMContentLoaded', async () => {
+            const provEl = document.getElementById('province');
+            const cityEl = document.getElementById('city');
+            provEl.addEventListener('input', () => inferRegionFromCityOrProvince(cityEl.value, provEl.value, true));
+            cityEl.addEventListener('change', () => inferRegionFromCityOrProvince(cityEl.value, provEl.value, false));
+
+            document.getElementById('cardsGrid').addEventListener('click', (e) => {
+                const el = e.target.closest('[data-id]');
+                if (el) openDetailModal(el.dataset.id);
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape') return;
+                const isOpen = id => !document.getElementById(id).classList.contains('hidden');
+                if (isOpen('confirmModal')) closeDialog();
+                else if (isOpen('interactiveCropModal')) closeInteractiveCropModal();
+                else if (isOpen('cameraModal')) closeCameraModal();
+                else if (isOpen('detailModal')) closeDetailModal();
+                else if (isOpen('scanModal')) closeScanModal();
+            });
+
+            try {
+                await loadDatabase();
+            } catch (e) {
+                console.error('Errore apertura archivio:', e);
+                showToast("Errore nell'apertura dell'archivio: " + (e.message || e), 'error');
+            }
+            refreshAll();
+
+            storagePersisted = await requestPersistence();
+            updateStorageInfo();
+            checkBackupReminder();
+            initDrive();
+
+            if (storageMode === 'local') {
+                showToast('Questo browser non consente la memoria estesa: archivio limitato a circa 5 MB. Prova con Chrome o Safari aggiornati.', 'warning');
+            }
+        });
+
+        function refreshAll() {
+            sortCards();
+            populateGeographicDropdowns();
+            renderCards();
+            updateStorageInfo();
+            checkBackupReminder();
+        }
+
+        /* =====================================================================
+           ARCHIVIO — IndexedDB (con ripiego su localStorage se non disponibile)
+           ===================================================================== */
+        const DB_NAME = 'cardscanner_db';
+        const DB_VERSION = 1;
+        const BACKUP_REMIND_DAYS = 30;     // promemoria dopo 30 giorni dall'ultimo backup...
+        const BACKUP_REMIND_CHANGES = 20;  // ...oppure dopo 20 biglietti nuovi/modificati
+        const BACKUP_SNOOZE_DAYS = 7;      // "Più tardi" rimanda di 7 giorni
+        const DAY_MS = 24 * 60 * 60 * 1000;
+
+        let db = null;
+        let storageMode = 'idb';           // 'idb' oppure 'local' (ripiego)
+        let storagePersisted = false;
+        const metaCache = {};
+
+        function openDB() {
+            return new Promise((resolve, reject) => {
+                if (!window.indexedDB) return reject(new Error('IndexedDB non disponibile'));
+                let req;
+                try { req = indexedDB.open(DB_NAME, DB_VERSION); } catch (e) { return reject(e); }
+                req.onupgradeneeded = () => {
+                    const d = req.result;
+                    if (!d.objectStoreNames.contains('cards')) d.createObjectStore('cards', { keyPath: 'id' });
+                    if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta');
+                };
+                req.onsuccess = () => {
+                    const d = req.result;
+                    d.onversionchange = () => d.close();
+                    resolve(d);
+                };
+                req.onerror = () => reject(req.error);
+                req.onblocked = () => reject(new Error("archivio bloccato da un'altra scheda aperta: chiudila e ricarica"));
+            });
+        }
+
+        function idbRequest(req) {
+            return new Promise((resolve, reject) => {
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function txDone(tx) {
+            return new Promise((resolve, reject) => {
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error || new Error('operazione annullata'));
+            });
+        }
+
+        async function metaGet(key) {
+            if (key in metaCache) return metaCache[key];
+            let value;
+            if (storageMode === 'idb') {
+                value = await idbRequest(db.transaction('meta', 'readonly').objectStore('meta').get(key));
+            } else {
+                try {
+                    const raw = localStorage.getItem('cardscanner_meta_' + key);
+                    value = raw === null ? undefined : JSON.parse(raw);
+                } catch (e) { value = undefined; }
+            }
+            metaCache[key] = value;
+            return value;
+        }
+
+        async function metaSet(key, value) {
+            metaCache[key] = value;
+            if (storageMode === 'idb') {
+                const tx = db.transaction('meta', 'readwrite');
+                tx.objectStore('meta').put(value, key);
+                await txDone(tx);
+            } else {
+                localStorage.setItem('cardscanner_meta_' + key, JSON.stringify(value));
+            }
+        }
+
+        // Salva/aggiorna un solo biglietto
+        async function storePutCard(card) {
+            if (storageMode === 'idb') {
+                const tx = db.transaction('cards', 'readwrite');
+                tx.objectStore('cards').put(card);
+                await txDone(tx);
+            } else {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(cardsData));
+            }
+        }
+
+        async function storeDeleteCard(id) {
+            if (storageMode === 'idb') {
+                const tx = db.transaction('cards', 'readwrite');
+                tx.objectStore('cards').delete(id);
+                await txDone(tx);
+            } else {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(cardsData));
+            }
+        }
+
+        // Riscrive tutto l'archivio in un'unica operazione (import, alleggerimento foto...)
+        async function storeReplaceAll(cards) {
+            if (storageMode === 'idb') {
+                const tx = db.transaction('cards', 'readwrite');
+                const store = tx.objectStore('cards');
+                store.clear();
+                cards.forEach(c => store.put(c));
+                await txDone(tx);
+            } else {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(cards));
+            }
+        }
+
+        async function storePutMany(cards) {
+            if (storageMode === 'idb') {
+                const tx = db.transaction('cards', 'readwrite');
+                cards.forEach(c => tx.objectStore('cards').put(c));
+                await txDone(tx);
+            } else {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(cardsData));
+            }
+        }
+
+        async function storeDeleteMany(ids) {
+            if (storageMode === 'idb') {
+                const tx = db.transaction('cards', 'readwrite');
+                ids.forEach(id => tx.objectStore('cards').delete(id));
+                await txDone(tx);
+            } else {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(cardsData));
+            }
+        }
+
+        // Esegue un salvataggio e mostra un messaggio chiaro se fallisce
+        async function persistSafely(fn) {
+            try {
+                await fn();
+                return true;
+            } catch (e) {
+                console.error('Salvataggio fallito:', e);
+                const quota = e && (e.name === 'QuotaExceededError' || /quota/i.test(e.message || ''));
+                showToast(quota
+                    ? "Spazio esaurito: il salvataggio non è riuscito. Esporta un backup, poi premi 'Alleggerisci foto' o elimina qualche biglietto."
+                    : 'Salvataggio non riuscito: ' + (e && e.message ? e.message : e), 'error');
+                return false;
+            }
+        }
+
+        async function loadDatabase() {
+            try {
+                db = await openDB();
+                storageMode = 'idb';
+            } catch (e) {
+                console.warn('IndexedDB non utilizzabile, uso localStorage:', e);
+                storageMode = 'local';
+            }
+
+            let cards = [];
+            if (storageMode === 'idb') {
+                cards = await idbRequest(db.transaction('cards', 'readonly').objectStore('cards').getAll());
+
+                // Trasferimento automatico dei biglietti salvati con la versione precedente
+                if (!(await metaGet('migratedFromLocal'))) {
+                    let legacy = null, legacyExists = false;
+                    try {
+                        const raw = localStorage.getItem(STORAGE_KEY);
+                        legacyExists = raw !== null;
+                        if (raw) legacy = JSON.parse(raw);
+                    } catch (e) {}
+
+                    let migrated = 0;
+                    if (Array.isArray(legacy) && legacy.length) {
+                        const ids = new Set(cards.map(c => c.id));
+                        const toAdd = legacy.filter(c => c && c.id && !ids.has(c.id));
+                        if (toAdd.length) {
+                            const tx = db.transaction('cards', 'readwrite');
+                            toAdd.forEach(c => tx.objectStore('cards').put(c));
+                            await txDone(tx);
+                            cards = cards.concat(toAdd);
+                            migrated = toAdd.length;
+                        }
+                    }
+                    try {
+                        const oldSeen = Number(localStorage.getItem(EMBED_SEEN_KEY)) || 0;
+                        if (oldSeen) await metaSet('embeddedSeen', oldSeen);
+                    } catch (e) {}
+                    if (legacyExists) await metaSet('initialized', true);
+                    await metaSet('migratedFromLocal', Date.now());
+                    // Libero la vecchia memoria (i dati sono ora al sicuro in IndexedDB)
+                    try {
+                        localStorage.removeItem(STORAGE_KEY);
+                        localStorage.removeItem(EMBED_SEEN_KEY);
+                    } catch (e) {}
+                    if (migrated) {
+                        setTimeout(() => showToast(`${migrated} biglietti trasferiti nella nuova memoria estesa.`, 'success'), 400);
+                    }
+                }
+            } else {
+                try {
+                    const raw = localStorage.getItem(STORAGE_KEY);
+                    if (raw !== null) {
+                        cards = JSON.parse(raw) || [];
+                        await metaSet('initialized', true);
+                    }
+                } catch (e) {
+                    console.error('Errore caricamento dati:', e);
+                }
+            }
+            cardsData = Array.isArray(cards) ? cards : [];
+
+            // Dati incorporati in un file HTML esportato: caricati una sola volta per file
+            const emb = window.EMBEDDED_CARDS_DATA;
+            let embCards = null, embAt = 0;
+            if (Array.isArray(emb)) { embCards = emb; embAt = 1; }
+            else if (emb && Array.isArray(emb.cards)) { embCards = emb.cards; embAt = emb.exportedAt || 1; }
+            const seen = Number(await metaGet('embeddedSeen')) || 0;
+
+            if (embCards && embAt > seen) {
+                const hadCards = cardsData.length > 0;
+                const { added, updated } = mergeCards(embCards.map(stripSync));
+                if (await persistSafely(() => storeReplaceAll(cardsData))) {
+                    await metaSet('embeddedSeen', embAt);
+                    await metaSet('initialized', true);
+                    if (hadCards && (added || updated)) {
+                        setTimeout(() => showToast(`Dal file esportato: ${added} biglietti aggiunti, ${updated} aggiornati.`, 'info'), 600);
+                    }
+                }
+            } else if (!cardsData.length && !(await metaGet('initialized'))) {
+                // Primissimo avvio: biglietti di esempio (solo una volta)
+                cardsData = DEMO_CARDS.map(c => ({ ...c }));
+                await persistSafely(() => storeReplaceAll(cardsData));
+                await metaSet('initialized', true);
+            }
+        }
+
+        async function requestPersistence() {
+            if (!navigator.storage || !navigator.storage.persist) return false;
+            try {
+                if (await navigator.storage.persisted()) return true;
+                return await navigator.storage.persist();
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function cardCreatedAt(c) {
+            if (c.createdAt) return c.createdAt;
+            const m = String(c.id).match(/(\d{12,})/);
+            return m ? Number(m[1]) : (c.updatedAt || 0);
+        }
+
+        // Più recenti in alto
+        function sortCards() {
+            cardsData.sort((a, b) => cardCreatedAt(b) - cardCreatedAt(a));
+        }
+
+        // Unisce per id; in caso di doppione tiene la versione modificata più di recente
+        function mergeCards(incoming) {
+            const map = new Map(cardsData.map(c => [c.id, c]));
+            let added = 0, updated = 0;
+            (incoming || []).forEach(c => {
+                if (!c || !c.id) return;
+                const existing = map.get(c.id);
+                if (!existing) { map.set(c.id, c); added++; }
+                else if ((c.updatedAt || 0) > (existing.updatedAt || 0)) { map.set(c.id, c); updated++; }
+            });
+            cardsData = Array.from(map.values());
+            return { added, updated };
+        }
+
+        async function updateStorageInfo() {
+            const bytes = new Blob([JSON.stringify(cardsData)]).size;
+            const photos = cardsData.reduce((n, c) => n + (isDataImage(c.frontImg) ? 1 : 0) + (isDataImage(c.backImg) ? 1 : 0), 0);
+            const info = document.getElementById('storageInfo');
+            info.querySelector('span').textContent = `Archivio: ${formatBytes(bytes)} · ${photos} foto`;
+
+            let title = storageMode === 'idb' ? 'Memoria estesa (IndexedDB).' : 'Memoria limitata a circa 5 MB (localStorage).';
+            try {
+                if (navigator.storage && navigator.storage.estimate) {
+                    const est = await navigator.storage.estimate();
+                    if (est.quota) title += ` Spazio disponibile per l'app: circa ${formatBytes(est.quota)}.`;
+                }
+            } catch (e) {}
+            title += storagePersisted
+                ? ' Archivio protetto: il browser non lo cancella per liberare spazio.'
+                : " Archivio non protetto: in caso di poco spazio il browser potrebbe cancellarlo. Fai backup regolari.";
+            info.title = title;
+
+            const badge = document.getElementById('persistBadge');
+            badge.classList.toggle('hidden', !storagePersisted);
+            badge.classList.toggle('inline-flex', storagePersisted);
+        }
+
+        /* =====================================================================
+           PROMEMORIA BACKUP
+           ===================================================================== */
+        async function checkBackupReminder() {
+            const lastBackup = Number(await metaGet('lastBackupAt')) || 0;
+            const snoozeUntil = Number(await metaGet('backupSnoozeUntil')) || 0;
+            const now = Date.now();
+
+            const info = document.querySelector('#backupInfo span');
+            info.textContent = 'Ultimo backup: ' + (lastBackup ? relativeDays(lastBackup) : 'mai');
+
+            // Con Google Drive collegato la copia è automatica: niente promemoria
+            if (driveEnabled() && (await metaGet('driveConnected'))) {
+                const lastSync = Number(await metaGet('lastSyncAt')) || 0;
+                info.textContent = 'Copia su Drive: ' + (lastSync ? relativeTime(lastSync) : 'in attesa');
+                const banner = document.getElementById('backupBanner');
+                banner.classList.add('hidden');
+                banner.classList.remove('flex');
+                return;
+            }
+
+            const realCards = cardsData.filter(c => !String(c.id).startsWith('demo-'));
+            const changed = realCards.filter(c => (c.updatedAt || cardCreatedAt(c)) > lastBackup).length;
+
+            // Se non hai mai fatto un backup, conto i giorni dal biglietto più vecchio
+            const reference = lastBackup || Math.min(...realCards.map(cardCreatedAt).filter(Boolean), now);
+            const days = Math.floor((now - reference) / DAY_MS);
+
+            const due = changed > 0 && (days >= BACKUP_REMIND_DAYS || changed >= BACKUP_REMIND_CHANGES);
+            const show = due && now >= snoozeUntil;
+
+            const banner = document.getElementById('backupBanner');
+            banner.classList.toggle('hidden', !show);
+            banner.classList.toggle('flex', show);
+            if (show) {
+                const what = changed === 1 ? '1 biglietto nuovo o modificato' : `${changed} biglietti nuovi o modificati`;
+                document.getElementById('backupBannerText').textContent = lastBackup
+                    ? `Ultimo backup ${relativeDays(lastBackup)}: da allora ci sono ${what}. Esporta il file e salvalo su Drive, Dropbox o mandalo a te stessa per email.`
+                    : `Non hai ancora fatto un backup: ${what} esistono solo in questo browser. Esporta il file e salvalo su Drive, Dropbox o mandalo a te stessa per email.`;
+            }
+        }
+
+        async function snoozeBackupReminder() {
+            await metaSet('backupSnoozeUntil', Date.now() + BACKUP_SNOOZE_DAYS * DAY_MS).catch(() => {});
+            checkBackupReminder();
+            showToast(`Ok, te lo ricordo tra ${BACKUP_SNOOZE_DAYS} giorni.`, 'info');
+        }
+
+        async function markBackupDone() {
+            try {
+                await metaSet('lastBackupAt', Date.now());
+                await metaSet('backupSnoozeUntil', 0);
+            } catch (e) {}
+            checkBackupReminder();
+        }
+
+        function relativeDays(ts) {
+            const days = Math.floor((Date.now() - ts) / DAY_MS);
+            if (days <= 0) return 'oggi';
+            if (days === 1) return 'ieri';
+            return `${days} giorni fa`;
+        }
+
+        /* =====================================================================
+           IMMAGINI
+           ===================================================================== */
+        function isDataImage(src) {
+            return typeof src === 'string' && src.startsWith('data:image');
+        }
+
+        function loadImage(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = src;
+            });
+        }
+
+        /**
+         * Ridimensiona e ricomprime. Con allowWebp prova anche WebP (più leggero, dove supportato)
+         * e tiene il formato più piccolo. Se il risultato pesa più dell'originale, tiene l'originale.
+         */
+        async function resizeImage(src, maxSide, quality, allowWebp = false) {
+            if (!isDataImage(src)) return src || '';
+            try {
+                const img = await loadImage(src);
+                const w0 = img.naturalWidth || img.width;
+                const h0 = img.naturalHeight || img.height;
+                const scale = Math.min(1, maxSide / Math.max(w0, h0));
+                const w = Math.max(1, Math.round(w0 * scale));
+                const h = Math.max(1, Math.round(h0 * scale));
+
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, w, h);
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, w, h);
+
+                let best = canvas.toDataURL('image/jpeg', quality);
+                if (allowWebp) {
+                    const webp = canvas.toDataURL('image/webp', quality);
+                    if (webp.startsWith('data:image/webp') && webp.length < best.length) best = webp;
+                }
+                return (best.length < src.length || scale < 1) ? best : src;
+            } catch (e) {
+                console.warn('Ridimensionamento non riuscito:', e);
+                return src;
+            }
+        }
+
+        const compressForStorage = src => resizeImage(src, IMG_STORE.maxSide, IMG_STORE.quality, true);
+        const prepareWorkImage = src => resizeImage(src, IMG_WORK.maxSide, IMG_WORK.quality, false);
+
+        function setImage(type, dataUrl) {
+            imageState[type] = dataUrl || null;
+            const suffix = type === 'front' ? 'Front' : 'Back';
+            const preview = document.getElementById('preview' + suffix);
+            const placeholder = document.getElementById('placeholder' + suffix);
+            const cropBtn = document.getElementById('cropBtn' + suffix);
+            const removeBtn = document.getElementById('removeBtn' + suffix);
+
+            if (dataUrl) {
+                preview.src = dataUrl;
+                preview.classList.remove('hidden');
+                placeholder.classList.add('hidden');
+                cropBtn.classList.remove('hidden');
+                cropBtn.classList.add('flex');
+                removeBtn.classList.remove('hidden');
+            } else {
+                preview.removeAttribute('src');
+                preview.classList.add('hidden');
+                placeholder.classList.remove('hidden');
+                cropBtn.classList.add('hidden');
+                cropBtn.classList.remove('flex');
+                removeBtn.classList.add('hidden');
+            }
+        }
+
+        function readFileAsDataURL(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = e => resolve(e.target.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function handleImageUpload(event, type) {
+            const input = event.target;
+            const file = input.files && input.files[0];
+            if (!file) return;
+            try {
+                const raw = await readFileAsDataURL(file);
+                const work = await prepareWorkImage(raw);
+                setImage(type, work);
+            } catch (e) {
+                showToast("Impossibile leggere l'immagine selezionata.", 'error');
+            } finally {
+                input.value = ''; // permette di riselezionare lo stesso file
+            }
+        }
+
+        async function optimizeAllImages() {
+            const count = cardsData.reduce((n, c) => n + (isDataImage(c.frontImg) ? 1 : 0) + (isDataImage(c.backImg) ? 1 : 0), 0);
+            if (!count) {
+                showToast('Non ci sono foto salvate da alleggerire.', 'info');
+                return;
+            }
+            showConfirm(
+                'Alleggerisci foto',
+                `Le ${count} foto dell'archivio verranno ricompresse al minimo (lato massimo ${IMG_STORE.maxSide}px, qualità ${Math.round(IMG_STORE.quality * 100)}%). Restano leggibili, ma l'operazione non si può annullare.`,
+                async () => {
+                    const before = new Blob([JSON.stringify(cardsData)]).size;
+                    showToast('Compressione in corso...', 'info');
+                    for (const card of cardsData) {
+                        const f0 = card.frontImg, b0 = card.backImg;
+                        if (isDataImage(card.frontImg)) card.frontImg = await compressForStorage(card.frontImg);
+                        if (isDataImage(card.backImg)) card.backImg = await compressForStorage(card.backImg);
+                        if (card.frontImg !== f0 || card.backImg !== b0) card.updatedAt = Date.now();
+                    }
+                    await persistSafely(() => storeReplaceAll(cardsData));
+                    refreshAll();
+                    scheduleSync();
+                    const after = new Blob([JSON.stringify(cardsData)]).size;
+                    showToast(`Archivio alleggerito: da ${formatBytes(before)} a ${formatBytes(after)}.`, 'success');
+                },
+                { okText: 'Alleggerisci' }
+            );
+        }
+
+        /* =====================================================================
+           RITAGLIO
+           ===================================================================== */
+        function openInteractiveCropModal(type) {
+            activeCropTarget = type;
+            const src = imageState[type];
+            if (!src) {
+                showToast("Carica prima un'immagine da ritagliare.", 'warning');
+                return;
+            }
+            const modal = document.getElementById('interactiveCropModal');
+            const cropImg = document.getElementById('cropModalImage');
+
+            if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
+            cropImg.src = src;
+            modal.classList.remove('hidden');
+
+            setTimeout(() => {
+                cropperInstance = new Cropper(cropImg, {
+                    viewMode: 1, dragMode: 'crop', autoCropArea: 0.95, restore: false,
+                    guides: true, center: true, highlight: true, cropBoxMovable: true,
+                    cropBoxResizable: true, toggleDragModeOnDblclick: false, responsive: true,
+                    background: false, checkCrossOrigin: false
+                });
+            }, 100);
+        }
+
+        function rotateCrop(degree) {
+            if (cropperInstance) cropperInstance.rotate(degree);
+        }
+
+        function resetCrop() {
+            if (cropperInstance) cropperInstance.reset();
+        }
+
+        async function applyInteractiveCrop() {
+            if (!cropperInstance) return;
+            try {
+                const canvas = cropperInstance.getCroppedCanvas({
+                    maxWidth: 2400, maxHeight: 2400, fillColor: '#fff',
+                    imageSmoothingEnabled: true, imageSmoothingQuality: 'high'
+                });
+                if (canvas) {
+                    const work = await prepareWorkImage(canvas.toDataURL('image/jpeg', 0.9));
+                    setImage(activeCropTarget, work);
+                    showToast('Immagine ritagliata.', 'success');
+                }
+            } catch (e) {
+                console.error(e);
+                showToast("Questa immagine non si può ritagliare. Ricaricala dal telefono.", 'error');
+            }
+            closeInteractiveCropModal();
+        }
+
+        function closeInteractiveCropModal() {
+            if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
+            document.getElementById('interactiveCropModal').classList.add('hidden');
+        }
+
+        /* =====================================================================
+           FOTOCAMERA
+           ===================================================================== */
+        async function openCameraModal(targetType = 'front') {
+            activeCameraTarget = targetType;
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                triggerNativeCamera(targetType);
+                return;
+            }
+            document.getElementById('cameraModalTitle').textContent =
+                targetType === 'front' ? 'Inquadra il fronte' : 'Inquadra il retro';
+            document.getElementById('cameraModal').classList.remove('hidden');
+            await startCameraStream();
+        }
+
+        function triggerNativeCamera(targetType) {
+            const input = document.getElementById(targetType === 'front' ? 'cameraNativeFront' : 'cameraNativeBack');
+            if (input) input.click();
+        }
+
+        function useNativeCamera() {
+            const target = activeCameraTarget;
+            closeCameraModal();
+            triggerNativeCamera(target);
+        }
+
+        async function startCameraStream() {
+            const video = document.getElementById('cameraVideo');
+            stopCameraStream();
+            video.muted = true;
+            video.setAttribute('playsinline', 'true');
+
+            try {
+                activeCameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: currentFacingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+                    audio: false
+                });
+                video.srcObject = activeCameraStream;
+                await video.play().catch(() => {});
+
+                // Il controllo parte DOPO il permesso: così il tempo per premere "Consenti" non conta
+                clearTimeout(cameraWatchdog);
+                cameraWatchdog = setTimeout(() => {
+                    if (activeCameraStream && video.readyState < 2) {
+                        closeCameraModal();
+                        showToast('La fotocamera non risponde, apro quella del telefono.', 'warning');
+                        triggerNativeCamera(activeCameraTarget);
+                    }
+                }, 4000);
+            } catch (err) {
+                console.error('Errore fotocamera:', err);
+                closeCameraModal();
+                showToast('Fotocamera non disponibile, apro quella del telefono.', 'info');
+                setTimeout(() => triggerNativeCamera(activeCameraTarget), 300);
+            }
+        }
+
+        function stopCameraStream() {
+            clearTimeout(cameraWatchdog);
+            if (activeCameraStream) {
+                activeCameraStream.getTracks().forEach(t => t.stop());
+                activeCameraStream = null;
+            }
+        }
+
+        function switchCameraFacing() {
+            currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+            startCameraStream();
+        }
+
+        function closeCameraModal() {
+            stopCameraStream();
+            const video = document.getElementById('cameraVideo');
+            video.srcObject = null;
+            document.getElementById('cameraModal').classList.add('hidden');
+        }
+
+        async function takePictureFromCamera() {
+            const video = document.getElementById('cameraVideo');
+            if (!activeCameraStream || !video.videoWidth) {
+                showToast('La fotocamera non è ancora pronta.', 'warning');
+                return;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            const target = activeCameraTarget;
+            const work = await prepareWorkImage(canvas.toDataURL('image/jpeg', 0.9));
+            closeCameraModal();
+            setImage(target, work);
+            showToast("Foto acquisita. Usa 'Ritaglia' per regolare i bordi.", 'success');
+        }
+
+        /* =====================================================================
+           OCR
+           ===================================================================== */
+        async function processOCR() {
+            const hasFront = !!imageState.front;
+            const hasBack = !!imageState.back;
+            if (!hasFront && !hasBack) {
+                showToast("Carica almeno una foto del biglietto prima di avviare l'OCR.", 'warning');
+                return;
+            }
+            if (typeof Tesseract === 'undefined') {
+                showToast("Motore OCR non caricato: serve la connessione a internet.", 'error');
+                return;
+            }
+
+            const progressBox = document.getElementById('ocrProgress');
+            const statusText = document.getElementById('ocrStatusText');
+            const progressBar = document.getElementById('ocrProgressBar');
+            const percentText = document.getElementById('ocrPercent');
+            const ocrBtn = document.getElementById('ocrBtn');
+
+            const setProgress = pct => {
+                progressBar.style.width = pct + '%';
+                percentText.textContent = pct + '%';
+            };
+
+            progressBox.classList.remove('hidden');
+            ocrBtn.disabled = true;
+            setProgress(0);
+
+            try {
+                const lines = [];
+                let text = '';
+                const sides = [];
+                if (hasFront) sides.push(['front', 'fronte']);
+                if (hasBack) sides.push(['back', 'retro']);
+
+                for (let i = 0; i < sides.length; i++) {
+                    const [key, label] = sides[i];
+                    statusText.textContent = `Lettura ${label}...`;
+                    const canvas = await preprocessImageForOCR(imageState[key]);
+                    const base = (i / sides.length) * 100;
+                    const res = await Tesseract.recognize(canvas, 'ita+eng', {
+                        logger: m => {
+                            if (m.status === 'recognizing text') {
+                                setProgress(Math.round(base + (m.progress || 0) * (100 / sides.length)));
+                            }
+                        }
+                    });
+                    if (res && res.data) {
+                        lines.push(...(res.data.lines || []));
+                        text += (res.data.text || '') + '\n';
+                    }
+                }
+
+                setProgress(100);
+                statusText.textContent = 'Compilazione dei campi...';
+                parseOCRResults({ text, lines });
+
+                const lbl = hasFront && hasBack ? 'fronte e retro' : (hasFront ? 'fronte' : 'retro');
+                showToast(`OCR completato su ${lbl}. Controlla i campi prima di salvare.`, 'success');
+            } catch (err) {
+                console.error('Errore OCR:', err);
+                showToast("Errore durante l'OCR: " + (err && err.message ? err.message : err), 'error');
+            } finally {
+                progressBox.classList.add('hidden');
+                ocrBtn.disabled = false;
+            }
+        }
+
+        // Scala di grigi + contrasto; ingrandisce le immagini piccole per aiutare Tesseract
+        async function preprocessImageForOCR(src) {
+            const img = await loadImage(src);
+            const w0 = img.naturalWidth || img.width;
+            const h0 = img.naturalHeight || img.height;
+            const longSide = Math.max(w0, h0);
+            const scale = longSide < 1400 ? Math.min(2.5, 1400 / longSide) : 1;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.round(w0 * scale);
+            canvas.height = Math.round(h0 * scale);
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const d = imageData.data;
+            const factor = 1.3;
+            for (let i = 0; i < d.length; i += 4) {
+                const gray = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+                const v = Math.min(255, Math.max(0, factor * (gray - 128) + 128));
+                d[i] = d[i + 1] = d[i + 2] = v;
+            }
+            ctx.putImageData(imageData, 0, 0);
+            return canvas;
+        }
+
+        const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+        const ROLE_RE = /\b(titolare|proprietari[oa]|direttor[ea]|chef|sous[- ]?chef|manager|responsabile|sommelier|ceo|cfo|cto|coo|founder|co-?founder|fondat(?:ore|rice)|amministrator[ea]|agente|commerciale|consulente|socio|soci[ae]|president[ea]|segretari[oa]|account|sales|marketing|buyer|ma[iî]tre|barman|bartender|enolog[oa]|agronom[oa]|giornalista|redattor[ea]|head|export manager)\b/i;
+        const COMPANY_FORM_RE = /\b(s\.?\s?r\.?\s?l|s\.?\s?p\.?\s?a|s\.?\s?n\.?\s?c|s\.?\s?a\.?\s?s|soc\.|societ[àa]|coop)\b/i;
+        const TITLE_PREFIX_RE = /^(dott\.?ssa|dott\.?|dr\.?|avv\.?|ing\.?|arch\.?|geom\.?|prof\.?ssa|prof\.?|sig\.?ra|sig\.?)\s+/i;
+
+        function parseOCRResults(ocrData) {
+            const rawText = ocrData.text || '';
+            const lines = (ocrData.lines || []).filter(l => l && l.text && (l.confidence === undefined || l.confidence >= 35));
+            const isContactLine = t => /@|www\.|https?:|\+?\d[\d\s./-]{6,}/i.test(t);
+
+            // 1. DITTA: la riga scritta più grande (esclusi contatti)
+            let company = '', maxHeight = 0;
+            lines.forEach(line => {
+                const t = line.text.trim();
+                if (t.length > 2 && !isContactLine(t)) {
+                    const h = line.bbox.y1 - line.bbox.y0;
+                    if (h > maxHeight) { maxHeight = h; company = t; }
+                }
+            });
+            if (company) setField('company', cleanText(company));
+
+            // 2. EMAIL
+            const emails = rawText.match(EMAIL_RE);
+            if (emails) setField('email', emails[0].toLowerCase());
+
+            // 3. SITO (cercato dopo aver tolto le email, così non prende il dominio dell'email)
+            const noEmail = rawText.replace(EMAIL_RE, ' ');
+            const web = noEmail.match(/\b(?:https?:\/\/[^\s,;]+|www\.[^\s,;]+|[a-z0-9][a-z0-9-]{1,}\.(?:it|com|net|org|eu|info|biz|shop|wine|store|events)(?:\/[^\s,;]*)?)(?=[\s,;]|$)/i);
+            if (web) setField('website', web[0].replace(/[.)]+$/, '').toLowerCase());
+
+            // 4. TELEFONO (salto le righe con partita IVA / codice fiscale)
+            const phoneText = rawText.split('\n').filter(l => !/p\.?\s?iva|partita|c\.?\s?f\.|cod\.?\s?fisc|vat|rea\b/i.test(l)).join('\n');
+            const phones = phoneText.match(/(?:(?:\+|00)\s?39[\s.\/-]?)?(?:3\d{2}[\s.\/-]?\d{3}[\s.\/-]?\d{3,4}|0\d{1,4}[\s.\/-]?\d{2,4}[\s.\/-]?\d{2,5})/g);
+            if (phones) {
+                const unique = [...new Set(phones.map(p => p.replace(/[^\d+]+/g, ' ').replace(/\s+/g, ' ').trim()))];
+                setField('phone', unique.slice(0, 2).join(' / '));
+            }
+
+            // 5. INDIRIZZO
+            parseItalianAddress(rawText);
+
+            // 6. NOME E RUOLO
+            parsePersonAndRole(lines, company);
+
+            // 7. TIPO DI ATTIVITÀ (solo se non già scelto)
+            const catInput = document.getElementById('category');
+            if (!catInput.value.trim()) {
+                const guess = guessCategory(rawText);
+                if (guess) {
+                    catInput.value = guess;
+                    highlightCategoryChips();
+                }
+            }
+        }
+
+        function setField(id, value) {
+            if (value) document.getElementById(id).value = value;
+        }
+
+        function guessCategory(text) {
+            for (const [cat, re] of CATEGORY_KEYWORDS) {
+                if (re.test(text)) return cat;
+            }
+            return '';
+        }
+
+        function parseItalianAddress(fullText) {
+            // VIA + CIVICO
+            const topo = ITALIAN_TOPONYMS.join('|');
+            const streetRe = new RegExp(
+                '(?:^|[^A-Za-zÀ-ÿ])(' + topo + ')\\.?\\s+([^,\\n\\r\\d]{2,}?)' +
+                '(?:\\s*,?\\s*(?:n\\.?\\s*)?(\\d{1,4}(?:\\s*\\/\\s*[A-Za-z0-9]{1,2}|\\s?[A-Za-z](?![A-Za-z]))?)(?=[\\s,;.]|$)' +
+                '|(?=\\s*(?:[,\\n\\r–-]|\\d{5}|$)))',
+                'i'
+            );
+            const m = fullText.match(streetRe);
+            if (m) {
+                const rawTopo = m[1].toUpperCase().replace(/\s+/g, '');
+                const toponym = TOPONYM_NORMALIZE[rawTopo] || (m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase());
+                const streetName = m[2].trim().replace(/[\s,-]+$/, '');
+                setField('street', `${toponym} ${streetName}`.trim());
+                if (m[3]) setField('houseNumber', m[3].replace(/\s+/g, '').toUpperCase());
+            }
+
+            // CAP + CITTÀ + (PROVINCIA)
+            const capRe = /\b(\d{5})\s*[-–]?\s*([A-Za-zÀ-ÿ'][A-Za-zÀ-ÿ'.\s-]*?)\s*(?:\(\s*([A-Za-z]{2})\s*\)|\s([A-Z]{2})(?![A-Za-z]))?(?=\s*(?:[,\n\r]|[-–|•·]|(?:info|e-?mail|tel|cell|fax|www|http|p\.?\s?iva)|\d)|\s*$)/i;
+            const c = fullText.match(capRe);
+            let city = '', prov = '';
+
+            if (c) {
+                setField('postcode', c[1]);
+                city = cleanCityName(c[2]);
+                const provCandidate = (c[3] || c[4] || '').toUpperCase();
+                if (provCandidate && PROVINCE_TO_REGION[provCandidate]) prov = provCandidate;
+                else if (provCandidate) city = `${city} ${c[3] || c[4]}`.trim();
+            } else {
+                for (const name in CITY_TO_PROVINCE) {
+                    if (new RegExp(`\\b${name}\\b`, 'i').test(fullText)) {
+                        city = name.replace(/\b\w/g, ch => ch.toUpperCase());
+                        prov = CITY_TO_PROVINCE[name];
+                        break;
+                    }
+                }
+            }
+
+            if (city) setField('city', city);
+            if (prov) setField('province', prov);
+            inferRegionFromCityOrProvince(city, prov, true);
+        }
+
+        function parsePersonAndRole(lines, companyLine) {
+            const topoRe = new RegExp('^(' + ITALIAN_TOPONYMS.join('|') + ')\\b', 'i');
+            let nameFound = false, roleFound = false;
+
+            for (const line of lines) {
+                const t = line.text.trim();
+                if (!t || t === companyLine || /[@\d]|www\.|https?:/i.test(t)) continue;
+
+                if (!roleFound && ROLE_RE.test(t) && t.split(/\s+/).length <= 6) {
+                    setField('role', cleanText(t));
+                    roleFound = true;
+                    continue;
+                }
+
+                if (!nameFound && !topoRe.test(t) && !COMPANY_FORM_RE.test(t)) {
+                    const clean = t.replace(TITLE_PREFIX_RE, '');
+                    const words = clean.split(/\s+/);
+                    const capitalized = words.filter(w => /^[A-ZÀ-Ý]/.test(w)).length;
+                    if (words.length >= 2 && words.length <= 4 && capitalized >= 2 && /^[A-ZÀ-Ý]/.test(words[0])) {
+                        setField('personName', cleanText(clean));
+                        nameFound = true;
+                    }
+                }
+                if (nameFound && roleFound) break;
+            }
+        }
+
+        function cleanText(str) {
+            return String(str).replace(/[^\p{L}\p{N}\s&'’.,\-\/]/gu, '').replace(/\s+/g, ' ').trim();
+        }
+
+        function cleanCityName(rawCity) {
+            if (!rawCity) return '';
+            return rawCity
+                .replace(/\b(info|e-?mail|mail|tel|telefono|cell|mobile|fax|www|http|https)\b.*/gi, '')
+                .replace(/[^a-zA-ZàèéìòùÀÈÉÌÒÙ\s'-]/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        function inferRegionFromCityOrProvince(city, province, overwriteRegion) {
+            let prov = (province || '').toUpperCase().trim();
+            const cityLower = (city || '').toLowerCase().trim();
+            const provInput = document.getElementById('province');
+            const regionInput = document.getElementById('region');
+
+            if (!prov && CITY_TO_PROVINCE[cityLower]) {
+                prov = CITY_TO_PROVINCE[cityLower];
+                if (!provInput.value) provInput.value = prov;
+            }
+            if (prov && PROVINCE_TO_REGION[prov] && (overwriteRegion || !regionInput.value)) {
+                regionInput.value = PROVINCE_TO_REGION[prov];
+            }
+        }
+
+        /* =====================================================================
+           TIPO DI ATTIVITÀ (chip rapidi + suggerimenti)
+           ===================================================================== */
+        function allCategories() {
+            const used = cardsData.map(c => (c.category || '').trim()).filter(Boolean);
+            const seen = new Set();
+            return [...BASE_CATEGORIES, ...used].filter(c => {
+                const k = c.toLowerCase();
+                if (seen.has(k)) return false;
+                seen.add(k);
+                return true;
+            });
+        }
+
+        function renderCategoryChips() {
+            const cats = allCategories();
+            document.getElementById('categoryOptions').innerHTML =
+                cats.map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+
+            const chips = document.getElementById('categoryChips');
+            chips.innerHTML = '';
+            BASE_CATEGORIES.forEach(cat => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.dataset.cat = cat;
+                btn.textContent = cat.split(' /')[0];
+                btn.title = cat;
+                btn.onclick = () => {
+                    const input = document.getElementById('category');
+                    input.value = input.value === cat ? '' : cat;
+                    highlightCategoryChips();
+                };
+                chips.appendChild(btn);
+            });
+            highlightCategoryChips();
+        }
+
+        function highlightCategoryChips() {
+            const current = document.getElementById('category').value.trim().toLowerCase();
+            document.querySelectorAll('#categoryChips button').forEach(btn => {
+                const active = btn.dataset.cat.toLowerCase() === current;
+                btn.className = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ' +
+                    (active
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-400 hover:text-emerald-700');
+            });
+        }
+
+        /* =====================================================================
+           ELENCO E FILTRI
+           ===================================================================== */
+        function renderCards() {
+            const grid = document.getElementById('cardsGrid');
+            const empty = document.getElementById('emptyState');
+            const counter = document.getElementById('cardsCounter');
+            const badge = document.getElementById('activeFiltersBadge');
+
+            const searchVal = document.getElementById('searchInput').value.toLowerCase().trim();
+            const fCat = document.getElementById('filterCategory').value;
+            const fCountry = document.getElementById('filterCountry').value;
+            const fRegion = document.getElementById('filterRegion').value;
+            const fCity = document.getElementById('filterCity').value;
+
+            const isFiltered = searchVal || fCat || fCountry || fRegion || fCity;
+            badge.classList.toggle('hidden', !isFiltered);
+            badge.classList.toggle('inline-flex', !!isFiltered);
+
+            const low = v => (v || '').toLowerCase().trim();
+            const filtered = cardsData.filter(card => {
+                const hay = [card.company, card.category, card.personName, card.role, card.phone, card.email,
+                    card.website, card.street, card.city, card.province, card.region, card.country, card.notes]
+                    .filter(Boolean).join(' ').toLowerCase();
+                return (!searchVal || hay.includes(searchVal))
+                    && (!fCat || low(card.category) === fCat)
+                    && (!fCountry || low(card.country) === fCountry)
+                    && (!fRegion || low(card.region) === fRegion)
+                    && (!fCity || low(card.city) === fCity || low(card.province) === fCity);
+            });
+
+            counter.textContent = `Mostrati ${filtered.length} di ${cardsData.length} biglietti`;
+
+            if (!filtered.length) {
+                grid.innerHTML = '';
+                empty.classList.remove('hidden');
+                empty.classList.add('flex');
+                return;
+            }
+            empty.classList.add('hidden');
+            empty.classList.remove('flex');
+
+            grid.innerHTML = filtered.map(card => `
+                <div data-id="${escapeHtml(card.id)}" role="button" tabindex="0" class="bg-white rounded-2xl p-4 shadow-sm hover:shadow-xl border border-slate-200/80 hover:border-emerald-500/50 transition-all duration-300 cursor-pointer group flex flex-col justify-between">
+                    <div>
+                        <div class="bg-slate-900/5 rounded-xl h-36 mb-3 flex items-center justify-center overflow-hidden relative border border-slate-100">
+                            ${card.frontImg
+                                ? `<img src="${escapeHtml(card.frontImg)}" alt="" loading="lazy" class="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300">`
+                                : `<div class="text-center p-2 text-slate-400"><i class="ph-bold ph-address-book text-3xl"></i><p class="text-[10px] mt-1">Nessuna immagine</p></div>`}
+                            ${card.category ? `<span class="absolute top-2 left-2 bg-emerald-600/90 text-white text-[10px] px-2 py-0.5 rounded-md font-semibold shadow-sm truncate max-w-[160px]">${escapeHtml(card.category)}</span>` : ''}
+                            ${card.backImg ? '<span class="absolute top-2 right-2 bg-slate-900/70 text-white text-[10px] px-2 py-0.5 rounded-md font-medium">Fronte/Retro</span>' : ''}
+                        </div>
+                        <h3 class="font-bold text-slate-900 text-base group-hover:text-emerald-600 transition-colors line-clamp-1">${escapeHtml(card.company || 'Senza ditta')}</h3>
+                        ${card.personName ? `<p class="text-xs font-semibold text-slate-700 mt-0.5 line-clamp-1">${escapeHtml(card.personName)}${card.role ? ` <span class="text-slate-400 font-normal">· ${escapeHtml(card.role)}</span>` : ''}</p>` : ''}
+                        <div class="mt-3 space-y-1 text-xs text-slate-600">
+                            ${card.phone ? `<p class="flex items-center gap-1.5 truncate"><i class="ph-bold ph-phone text-emerald-600"></i><span>${escapeHtml(card.phone)}</span></p>` : ''}
+                            ${card.email ? `<p class="flex items-center gap-1.5 truncate"><i class="ph-bold ph-envelope text-emerald-600"></i><span>${escapeHtml(card.email)}</span></p>` : ''}
+                            ${card.street || card.city ? `<p class="flex items-center gap-1.5 truncate"><i class="ph-bold ph-map-pin text-emerald-600"></i><span>${escapeHtml([[card.street, card.houseNumber].filter(Boolean).join(' '), card.city, card.province].filter(Boolean).join(', '))}</span></p>` : ''}
+                        </div>
+                    </div>
+                    <div class="mt-4 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                        <span>${escapeHtml(card.city || card.region || card.country || '')}</span>
+                        <span class="text-emerald-600 font-semibold flex items-center gap-1">Apri scheda <i class="ph-bold ph-caret-right"></i></span>
+                    </div>
+                </div>
+            `).join('');
+
+            grid.querySelectorAll('[data-id]').forEach(el => {
+                el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetailModal(el.dataset.id); } };
+            });
+        }
+
+        function populateGeographicDropdowns() {
+            const cats = new Map(), countries = new Map(), regions = new Map(), cities = new Map();
+            const add = (map, v) => { if (v && v.trim()) map.set(v.trim().toLowerCase(), v.trim()); };
+            cardsData.forEach(card => {
+                add(cats, card.category);
+                add(countries, card.country);
+                add(regions, card.region);
+                add(cities, card.city);
+                add(cities, card.province);
+            });
+            populateSelect('filterCategory', cats, 'Tutti i tipi');
+            populateSelect('filterCountry', countries, 'Tutti i Paesi');
+            populateSelect('filterRegion', regions, 'Tutte le regioni');
+            populateSelect('filterCity', cities, 'Tutte le città / province');
+        }
+
+        function populateSelect(elemId, map, defaultLabel) {
+            const select = document.getElementById(elemId);
+            const currentVal = select.value;
+            const items = Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1], 'it'));
+            select.innerHTML = `<option value="">${defaultLabel}</option>` +
+                items.map(([key, label]) => `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`).join('');
+            select.value = map.has(currentVal) ? currentVal : '';
+        }
+
+        function applyFilters() { renderCards(); }
+
+        function resetFilters() {
+            ['searchInput', 'filterCategory', 'filterCountry', 'filterRegion', 'filterCity']
+                .forEach(id => { document.getElementById(id).value = ''; });
+            renderCards();
+        }
+
+        /* =====================================================================
+           MODALE NUOVO / MODIFICA
+           ===================================================================== */
+        function openScanModal(editCardId = null) {
+            const form = document.getElementById('cardForm');
+            form.reset();
+            document.getElementById('country').value = 'Italia';
+            setImage('front', null);
+            setImage('back', null);
+            document.getElementById('ocrProgress').classList.add('hidden');
+
+            const card = editCardId ? cardsData.find(c => c.id === editCardId) : null;
+            if (card) {
+                document.getElementById('modalTitle').textContent = 'Modifica biglietto da visita';
+                document.getElementById('cardId').value = card.id;
+                ['company', 'category', 'personName', 'role', 'phone', 'email', 'website', 'street',
+                 'houseNumber', 'postcode', 'city', 'province', 'region', 'notes']
+                    .forEach(f => { document.getElementById(f).value = card[f] || ''; });
+                document.getElementById('country').value = card.country || 'Italia';
+                if (card.frontImg) setImage('front', card.frontImg);
+                if (card.backImg) setImage('back', card.backImg);
+            } else {
+                document.getElementById('modalTitle').textContent = 'Nuovo biglietto da visita';
+                document.getElementById('cardId').value = '';
+            }
+
+            renderCategoryChips();
+            document.getElementById('scanModal').classList.remove('hidden');
+        }
+
+        function closeScanModal() {
+            document.getElementById('scanModal').classList.add('hidden');
+        }
+
+        async function saveCard(event) {
+            event.preventDefault();
+            const saveBtn = document.getElementById('saveBtn');
+            saveBtn.disabled = true;
+
+            try {
+                const cardId = document.getElementById('cardId').value || ('card_' + Date.now());
+                const val = id => document.getElementById(id).value.trim();
+
+                // Le foto vengono ridotte al minimo SOLO qui, al salvataggio
+                const frontImg = imageState.front ? await compressForStorage(imageState.front) : '';
+                const backImg = imageState.back ? await compressForStorage(imageState.back) : '';
+
+                const existingCard = cardsData.find(c => c.id === cardId);
+                const newCard = {
+                    id: cardId,
+                    createdAt: existingCard ? cardCreatedAt(existingCard) : Date.now(),
+                    company: val('company'),
+                    category: val('category'),
+                    personName: val('personName'),
+                    role: val('role'),
+                    phone: val('phone'),
+                    email: val('email'),
+                    website: val('website'),
+                    street: val('street'),
+                    houseNumber: val('houseNumber'),
+                    postcode: val('postcode'),
+                    city: val('city'),
+                    province: val('province').toUpperCase(),
+                    region: val('region'),
+                    country: val('country') || 'Italia',
+                    notes: val('notes'),
+                    frontImg,
+                    backImg,
+                    updatedAt: Date.now()
+                };
+                if (existingCard && existingCard._driveId) {
+                    newCard._driveId = existingCard._driveId;
+                    newCard._syncedAt = existingCard._syncedAt;
+                }
+
+                const previous = cardsData.slice();
+                const index = cardsData.findIndex(c => c.id === cardId);
+                if (index >= 0) cardsData[index] = newCard;
+                else cardsData.unshift(newCard);
+
+                if (!(await persistSafely(() => storePutCard(newCard)))) {
+                    cardsData = previous;
+                    return;
+                }
+                if (!storagePersisted) {
+                    requestPersistence().then(ok => { storagePersisted = ok; updateStorageInfo(); });
+                }
+
+                refreshAll();
+                closeScanModal();
+                showToast('Biglietto salvato.', 'success');
+                scheduleSync();
+            } finally {
+                saveBtn.disabled = false;
+            }
+        }
+
+        /* =====================================================================
+           MODALE DETTAGLIO
+           ===================================================================== */
+        function openDetailModal(id) {
+            const card = cardsData.find(c => c.id === id);
+            if (!card) return;
+
+            currentDetailCardId = id;
+            currentDetailRotation = 0;
+
+            document.getElementById('detailCompanyTitle').textContent = card.company || 'Senza insegna';
+            document.getElementById('detailPerson').textContent = card.personName || '-';
+            document.getElementById('detailRole').textContent = card.role || '';
+            document.getElementById('detailCategoryText').textContent = card.category || 'Tipo non specificato';
+
+            // Telefoni cliccabili (anche più di uno separati da /)
+            const phoneSpan = document.querySelector('#detailPhone .val');
+            phoneSpan.innerHTML = '';
+            const phones = (card.phone || '').split('/').map(p => p.trim()).filter(Boolean);
+            if (phones.length) {
+                phones.forEach((p, i) => {
+                    if (i) phoneSpan.appendChild(document.createTextNode(' / '));
+                    phoneSpan.appendChild(makeLink('tel:' + p.replace(/[^\d+]/g, ''), p));
+                });
+            } else phoneSpan.textContent = 'Non specificato';
+
+            setDetailLink('detailEmail', card.email ? 'mailto:' + card.email : '', card.email, 'Non specificata');
+            setDetailLink('detailWebsite', card.website ? normalizeUrl(card.website) : '', card.website, 'Non specificato');
+
+            const address = formatAddress(card);
+            setDetailLink('detailAddress', address ? mapsUrl(card) : '', address, 'Indirizzo non specificato');
+
+            const notesBox = document.getElementById('detailNotesBox');
+            if (card.notes) {
+                document.getElementById('detailNotes').textContent = card.notes;
+                notesBox.classList.remove('hidden');
+            } else notesBox.classList.add('hidden');
+
+            document.getElementById('btnViewBack').classList.toggle('hidden', !card.backImg);
+            switchDetailImage('front');
+            document.getElementById('detailModal').classList.remove('hidden');
+        }
+
+        function makeLink(href, text) {
+            const a = document.createElement('a');
+            a.href = href;
+            a.textContent = text;
+            a.className = 'text-emerald-700 hover:underline break-all';
+            if (/^https?:/.test(href)) { a.target = '_blank'; a.rel = 'noopener'; }
+            return a;
+        }
+
+        function setDetailLink(containerId, href, text, fallback) {
+            const span = document.querySelector(`#${containerId} .val`);
+            span.innerHTML = '';
+            if (text) span.appendChild(href ? makeLink(href, text) : document.createTextNode(text));
+            else span.textContent = fallback;
+        }
+
+        function normalizeUrl(url) {
+            return /^https?:\/\//i.test(url) ? url : 'https://' + url;
+        }
+
+        function formatAddress(card) {
+            const cityPart = card.city ? `${card.city}${card.province ? ` (${card.province})` : ''}` : '';
+            return [
+                [card.street, card.houseNumber].filter(Boolean).join(' '),
+                [card.postcode, cityPart].filter(Boolean).join(' '),
+                card.country && card.country.toLowerCase() !== 'italia' ? card.country : ''
+            ].filter(Boolean).join(', ');
+        }
+
+        function mapsUrl(card) {
+            const q = [card.company, formatAddress(card), card.country].filter(Boolean).join(', ');
+            return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
+        }
+
+        function closeDetailModal() {
+            document.getElementById('detailModal').classList.add('hidden');
+            currentDetailCardId = null;
+        }
+
+        function switchDetailImage(type) {
+            const card = cardsData.find(c => c.id === currentDetailCardId);
+            if (!card) return;
+            const imgEl = document.getElementById('detailImg');
+            const btnFront = document.getElementById('btnViewFront');
+            const btnBack = document.getElementById('btnViewBack');
+            const on = 'px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 font-bold';
+            const off = 'px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 font-medium hover:bg-slate-700';
+            const hideBack = !card.backImg ? ' hidden' : '';
+
+            currentDetailRotation = 0;
+            imgEl.style.transform = 'rotate(0deg)';
+
+            if (type === 'front') {
+                imgEl.src = card.frontImg || 'https://placehold.co/600x350/1e293b/ffffff?text=Nessuna+foto';
+                btnFront.className = on;
+                btnBack.className = off + hideBack;
+            } else {
+                imgEl.src = card.backImg;
+                btnBack.className = on;
+                btnFront.className = off;
+            }
+        }
+
+        function rotateDetailImg() {
+            currentDetailRotation = (currentDetailRotation + 90) % 360;
+            document.getElementById('detailImg').style.transform = `rotate(${currentDetailRotation}deg)`;
+        }
+
+        function editCurrentCard() {
+            const id = currentDetailCardId;
+            closeDetailModal();
+            openScanModal(id);
+        }
+
+        function deleteCurrentCard() {
+            const id = currentDetailCardId;
+            if (!id) return;
+            showConfirm('Elimina biglietto', "Vuoi eliminare questo biglietto dall'archivio? L'operazione non si può annullare.", async () => {
+                const previous = cardsData.slice();
+                const removed = cardsData.find(c => c.id === id);
+                cardsData = cardsData.filter(c => c.id !== id);
+                if (!(await persistSafely(() => storeDeleteCard(id)))) {
+                    cardsData = previous;
+                    return;
+                }
+                if (removed && removed._driveId) await addPendingDeletes([removed._driveId]).catch(() => {});
+                refreshAll();
+                closeDetailModal();
+                showToast('Biglietto eliminato.', 'info');
+                scheduleSync();
+            }, { okText: 'Elimina', danger: true });
+        }
+
+        /* =====================================================================
+           CONDIVISIONE
+           ===================================================================== */
+        function currentCard() {
+            return cardsData.find(c => c.id === currentDetailCardId);
+        }
+
+        function buildShareText(card, bold) {
+            const b = s => bold ? `*${s}*` : s;
+            const out = [];
+            out.push(`🎴 ${b(card.company || 'Biglietto da visita')}`);
+            if (card.category) out.push(`🏷️ Tipo: ${card.category}`);
+            if (card.personName) out.push(`👤 ${card.personName}${card.role ? ` (${card.role})` : ''}`);
+            else if (card.role) out.push(`👤 ${card.role}`);
+            if (card.phone) out.push(`📞 ${card.phone}`);
+            if (card.email) out.push(`✉️ ${card.email}`);
+            if (card.website) out.push(`🌐 ${card.website}`);
+            const addr = formatAddress(card);
+            if (addr) {
+                out.push(`📍 ${addr}`);
+                out.push(`🗺️ ${mapsUrl(card)}`);
+            }
+            if (card.notes) out.push(`📝 ${card.notes}`);
+            return out.join('\n');
+        }
+
+        function shareWhatsApp() {
+            const card = currentCard();
+            if (!card) return;
+            window.open('https://wa.me/?text=' + encodeURIComponent(buildShareText(card, true)), '_blank');
+        }
+
+        function shareEmail() {
+            const card = currentCard();
+            if (!card) return;
+            const subject = `Contatto: ${card.company || card.personName || 'biglietto da visita'}`;
+            const body = buildShareText(card, false) +
+                '\n\n(Per le foto del biglietto usa "Invia con foto" dal telefono.)';
+            window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        }
+
+        // Apre il menu di condivisione del telefono con foto + scheda contatto allegate
+        async function shareWithPhotos() {
+            const card = currentCard();
+            if (!card) return;
+
+            const base = slugify(card.company || card.personName || 'biglietto');
+            const images = [];
+            if (isDataImage(card.frontImg)) images.push(dataUrlToFile(card.frontImg, base + '_fronte'));
+            if (isDataImage(card.backImg)) images.push(dataUrlToFile(card.backImg, base + '_retro'));
+            const vcf = new File([buildVCard(card)], base + '.vcf', { type: 'text/vcard' });
+            const text = buildShareText(card, true);
+            const title = card.company || 'Biglietto da visita';
+
+            // Prova in ordine: foto + vCard, solo foto, solo testo
+            const attempts = [
+                { title, text, files: [...images, vcf] },
+                images.length ? { title, text, files: images } : null,
+                { title, text }
+            ].filter(Boolean);
+
+            if (!navigator.share) {
+                await copyToClipboard(text);
+                showToast("Questo browser non ha il menu di condivisione: testo copiato. Dal telefono puoi allegare anche le foto.", 'info');
+                return;
+            }
+
+            for (const data of attempts) {
+                if (data.files && !(navigator.canShare && navigator.canShare(data))) continue;
+                try {
+                    await navigator.share(data);
+                    return;
+                } catch (err) {
+                    if (err.name === 'AbortError') return;
+                    console.warn('Condivisione non riuscita, provo alternativa:', err);
+                }
+            }
+            await copyToClipboard(text);
+            showToast('Condivisione non disponibile: testo copiato negli appunti.', 'warning');
+        }
+
+        function downloadVCard() {
+            const card = currentCard();
+            if (!card) return;
+            downloadFile(buildVCard(card), slugify(card.company || card.personName || 'contatto') + '.vcf', 'text/vcard');
+            showToast('Scheda contatto scaricata: aprila per aggiungerla alla rubrica.', 'success');
+        }
+
+        async function copyCardText() {
+            const card = currentCard();
+            if (!card) return;
+            const ok = await copyToClipboard(buildShareText(card, false));
+            showToast(ok ? 'Dati del contatto copiati.' : 'Impossibile copiare il testo.', ok ? 'success' : 'error');
+        }
+
+        function buildVCard(card) {
+            const esc = s => String(s || '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1');
+            const parts = (card.personName || '').trim().split(/\s+/).filter(Boolean);
+            const last = parts.length > 1 ? parts.pop() : '';
+            const first = parts.join(' ');
+            const lines = [
+                'BEGIN:VCARD',
+                'VERSION:3.0',
+                `N:${esc(last)};${esc(first)};;;`,
+                `FN:${esc(card.personName || card.company || 'Contatto')}`
+            ];
+            if (card.company) lines.push(`ORG:${esc(card.company)}`);
+            if (card.role) lines.push(`TITLE:${esc(card.role)}`);
+            (card.phone || '').split('/').map(p => p.trim()).filter(Boolean)
+                .forEach(p => lines.push(`TEL;TYPE=WORK,VOICE:${p.replace(/[^\d+ ]/g, '')}`));
+            if (card.email) lines.push(`EMAIL;TYPE=INTERNET,WORK:${esc(card.email)}`);
+            if (card.website) lines.push(`URL:${esc(normalizeUrl(card.website))}`);
+            if (card.street || card.city) {
+                lines.push(`ADR;TYPE=WORK:;;${esc([card.street, card.houseNumber].filter(Boolean).join(' '))};${esc(card.city)};${esc(card.province)};${esc(card.postcode)};${esc(card.country)}`);
+            }
+            if (card.category) lines.push(`CATEGORIES:${esc(card.category)}`);
+            const note = [card.category ? `Tipo: ${card.category}` : '', card.notes].filter(Boolean).join('\n');
+            if (note) lines.push(`NOTE:${esc(note)}`);
+            lines.push('END:VCARD');
+            return lines.join('\r\n');
+        }
+
+        function dataUrlToFile(dataUrl, name) {
+            const [meta, b64] = dataUrl.split(',');
+            const mime = (meta.match(/data:(.*?);/) || [])[1] || 'image/jpeg';
+            const bin = atob(b64);
+            const arr = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            const ext = mime.split('/')[1].replace('jpeg', 'jpg');
+            return new File([arr], `${name}.${ext}`, { type: mime });
+        }
+
+        async function copyToClipboard(text) {
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }
+            } catch (e) {}
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) {}
+            document.body.removeChild(ta);
+            return ok;
+        }
+
+        /* =====================================================================
+           EXPORT / IMPORT
+           ===================================================================== */
+        function exportFullHTML() {
+            const payload = JSON.stringify({ exportedAt: Date.now(), cards: cardsData.map(stripSync) }).replace(/</g, '\\u003c');
+            const injection = EMBED_TAG_OPEN + 'window.EMBEDDED_CARDS_DATA = ' + payload + ';<\/script>\n';
+            const clean = PRISTINE_HTML.replace(EMBED_TAG_RE, '');
+            const html = clean.replace(HEAD_CLOSE, injection + HEAD_CLOSE);
+            downloadFile(html, `gestore_biglietti_con_dati_${getTimestamp()}.html`, 'text/html');
+            showToast(`File esportato (${formatBytes(new Blob([html]).size)}).`, 'success');
+            markBackupDone();
+        }
+
+        function exportJSON() {
+            const data = JSON.stringify(cardsData.map(stripSync), null, 2);
+            downloadFile(data, `backup_biglietti_${getTimestamp()}.json`, 'application/json');
+            showToast(`Backup esportato (${formatBytes(new Blob([data]).size)}). Salvalo su Drive, Dropbox o via email.`, 'success');
+            markBackupDone();
+        }
+
+        function importJSON(event) {
+            const input = event.target;
+            const file = input.files && input.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = e => {
+                input.value = '';
+                let imported;
+                try {
+                    imported = JSON.parse(e.target.result);
+                    if (imported && Array.isArray(imported.cards)) imported = imported.cards;
+                } catch (err) {
+                    showToast('Il file non è un JSON valido: ' + err.message, 'error');
+                    return;
+                }
+                if (!Array.isArray(imported)) {
+                    showToast('Il file non contiene un elenco di biglietti.', 'error');
+                    return;
+                }
+                imported = imported.filter(c => c && c.id).map(stripSync);
+                const previous = cardsData.slice();
+                const finish = async msg => {
+                    if (!(await persistSafely(() => storeReplaceAll(cardsData)))) {
+                        cardsData = previous;
+                        refreshAll();
+                        return;
+                    }
+                    refreshAll();
+                    showToast(msg, 'success');
+                    scheduleSync();
+                };
+                showDialog({
+                    title: 'Importa backup',
+                    message: `Il file contiene ${imported.length} biglietti. Vuoi aggiungerli al tuo archivio o sostituire completamente l'archivio attuale (${cardsData.length} biglietti)?`,
+                    buttons: [
+                        { label: 'Annulla', style: 'secondary' },
+                        { label: 'Sostituisci tutto', style: 'danger', onClick: () => {
+                            showConfirm('Sostituire tutto?', `I ${cardsData.length} biglietti attuali verranno cancellati e sostituiti da quelli del file.`, async () => {
+                                const newIds = new Set(imported.map(c => c.id));
+                                await addPendingDeletes(cardsData.filter(c => c._driveId && !newIds.has(c.id)).map(c => c._driveId)).catch(() => {});
+                                cardsData = imported;
+                                finish('Archivio sostituito.');
+                            }, { okText: 'Sostituisci', danger: true });
+                        } },
+                        { label: 'Aggiungi', style: 'primary', onClick: () => {
+                            const { added, updated } = mergeCards(imported);
+                            finish(`Importazione completata: ${added} aggiunti, ${updated} aggiornati.`);
+                        } }
+                    ]
+                });
+            };
+            reader.readAsText(file);
+        }
+
+        /* =====================================================================
+           UI: TOAST E DIALOG
+           ===================================================================== */
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            const colors = {
+                success: 'bg-emerald-900 text-emerald-100 border-emerald-700',
+                error: 'bg-red-900 text-red-100 border-red-700',
+                warning: 'bg-amber-900 text-amber-100 border-amber-700',
+                info: 'bg-slate-900 text-slate-100 border-slate-700'
+            };
+            const icons = { success: 'ph-check-circle', error: 'ph-warning-circle', warning: 'ph-warning', info: 'ph-info' };
+            toast.className = `pointer-events-auto max-w-sm flex items-center gap-2.5 px-4 py-3 rounded-xl border shadow-lg text-xs font-medium transition-all duration-300 translate-y-2 opacity-0 ${colors[type] || colors.info}`;
+            toast.innerHTML = `<i class="ph-bold ${icons[type] || icons.info} text-base shrink-0"></i><span>${escapeHtml(message)}</span>`;
+            container.appendChild(toast);
+            requestAnimationFrame(() => toast.classList.remove('translate-y-2', 'opacity-0'));
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, type === 'error' ? 6500 : 4000);
+        }
+
+        const DIALOG_STYLES = {
+            primary: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+            danger: 'bg-red-600 hover:bg-red-700 text-white',
+            secondary: 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+        };
+
+        let dialogDismiss = null;
+
+        function showDialog({ title, message, buttons, onDismiss }) {
+            dialogDismiss = onDismiss || null;
+            document.getElementById('confirmTitle').textContent = title;
+            document.getElementById('confirmMessage').textContent = message;
+            const container = document.getElementById('confirmButtons');
+            container.innerHTML = '';
+            buttons.forEach(b => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.textContent = b.label;
+                btn.className = 'px-4 py-2 rounded-xl text-xs font-semibold transition-all ' + (DIALOG_STYLES[b.style] || DIALOG_STYLES.secondary);
+                btn.onclick = () => {
+                    dialogDismiss = null;
+                    closeDialog();
+                    if (b.onClick) b.onClick();
+                };
+                container.appendChild(btn);
+            });
+            document.getElementById('confirmModal').classList.remove('hidden');
+            const last = container.lastElementChild;
+            if (last) last.focus();
+        }
+
+        function closeDialog() {
+            document.getElementById('confirmModal').classList.add('hidden');
+            const d = dialogDismiss;
+            dialogDismiss = null;
+            if (d) d();
+        }
+
+        function showConfirm(title, message, onConfirm, { okText = 'Conferma', danger = false } = {}) {
+            showDialog({
+                title, message,
+                buttons: [
+                    { label: 'Annulla', style: 'secondary' },
+                    { label: okText, style: danger ? 'danger' : 'primary', onClick: onConfirm }
+                ]
+            });
+        }
+
+        /* =====================================================================
+           GOOGLE DRIVE — sincronizzazione (un file per biglietto nella cartella dell'app)
+           ===================================================================== */
+        const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'; // l'app vede SOLO i file che crea lei
+        const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+        const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
+        const TOKEN_KEY = 'cardscanner_gtoken';
+
+        let gisTokenClient = null;
+        let gisPending = null;
+        let gToken = null, gTokenExp = 0;
+        let driveState = 'off';
+        let syncRunning = false, syncQueued = false, syncTimer = null;
+
+        function driveEnabled() { return !!GOOGLE_CLIENT_ID; }
+        function isDemo(card) { return String(card.id).startsWith('demo-'); }
+
+        // Toglie i campi interni di sincronizzazione (per export, import e upload)
+        function stripSync(card) {
+            const { _driveId, _syncedAt, ...rest } = card || {};
+            return rest;
+        }
+
+        function loadGis() {
+            return new Promise((resolve, reject) => {
+                if (window.google && google.accounts && google.accounts.oauth2) return resolve();
+                const s = document.createElement('script');
+                s.src = 'https://accounts.google.com/gsi/client';
+                s.async = true;
+                s.onload = () => resolve();
+                s.onerror = () => reject(new Error('servizio di accesso Google non raggiungibile (sei online?)'));
+                document.head.appendChild(s);
+            });
+        }
+
+        function initTokenClient() {
+            if (gisTokenClient || !(window.google && google.accounts && google.accounts.oauth2)) return;
+            gisTokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: GOOGLE_CLIENT_ID,
+                scope: DRIVE_SCOPE,
+                callback: resp => {
+                    const p = gisPending; gisPending = null;
+                    if (!p) return;
+                    if (resp.error) { p.reject(new Error(resp.error_description || resp.error)); return; }
+                    gToken = resp.access_token;
+                    gTokenExp = Date.now() + (Number(resp.expires_in) || 3600) * 1000;
+                    try { localStorage.setItem(TOKEN_KEY, JSON.stringify({ token: gToken, exp: gTokenExp })); } catch (e) {}
+                    p.resolve();
+                },
+                error_callback: err => {
+                    const p = gisPending; gisPending = null;
+                    if (!p) return;
+                    const closed = err && (err.type === 'popup_closed' || err.type === 'popup_failed_to_open');
+                    p.reject(new Error(closed ? 'accesso annullato o finestra bloccata' : ((err && (err.message || err.type)) || 'accesso non riuscito')));
+                }
+            });
+        }
+
+        // Va chiamata direttamente da un tocco dell'utente (altrimenti il browser blocca la finestra di Google)
+        function requestToken() {
+            initTokenClient();
+            if (!gisTokenClient) {
+                loadGis().then(initTokenClient).catch(() => {});
+                return Promise.reject(new Error('servizio di accesso Google non ancora pronto, riprova tra un attimo'));
+            }
+            return new Promise((resolve, reject) => {
+                gisPending = { resolve, reject };
+                gisTokenClient.requestAccessToken({ prompt: '' });
+            });
+        }
+
+        function restoreToken() {
+            try {
+                const t = JSON.parse(localStorage.getItem(TOKEN_KEY) || 'null');
+                if (t && t.exp > Date.now() + 60000) { gToken = t.token; gTokenExp = t.exp; }
+            } catch (e) {}
+        }
+        function tokenValid() { return !!gToken && gTokenExp > Date.now() + 60000; }
+        function clearToken() {
+            gToken = null; gTokenExp = 0;
+            try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+        }
+
+        async function driveFetch(url, opts = {}, attempt = 0) {
+            if (!tokenValid()) { const e = new Error('AUTH'); e.auth = true; throw e; }
+            const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + gToken } });
+            if (res.status === 401) { clearToken(); const e = new Error('AUTH'); e.auth = true; throw e; }
+            if ((res.status === 429 || res.status >= 500 || res.status === 403) && attempt < 3) {
+                // limite di richieste o errore temporaneo: riprovo con attesa crescente
+                const isRate = res.status !== 403 || /rate|limit/i.test(await res.clone().text());
+                if (isRate) {
+                    await new Promise(r => setTimeout(r, 800 * Math.pow(2, attempt) + Math.random() * 400));
+                    return driveFetch(url, opts, attempt + 1);
+                }
+            }
+            if (!res.ok) {
+                let msg = 'errore ' + res.status;
+                try { const j = await res.json(); if (j.error && j.error.message) msg = j.error.message; } catch (e) {}
+                const err = new Error(msg); err.status = res.status; throw err;
+            }
+            return res;
+        }
+
+        async function resetSyncState() {
+            let changed = false;
+            cardsData.forEach(c => {
+                if (c._driveId !== undefined || c._syncedAt !== undefined) { delete c._driveId; delete c._syncedAt; changed = true; }
+            });
+            if (changed) await storeReplaceAll(cardsData);
+            await metaSet('pendingDeletes', []);
+            await metaSet('driveFolderId', null);
+        }
+
+        async function ensureFolder() {
+            let id = await metaGet('driveFolderId');
+            if (id) {
+                try {
+                    const r = await driveFetch(`${DRIVE_API}/files/${id}?fields=id,trashed`);
+                    const j = await r.json();
+                    if (!j.trashed) return id;
+                } catch (e) {
+                    if (e.auth || (e.status !== 404 && e.status !== 403)) throw e;
+                }
+                // Cartella sparita o di un altro account Google: riparto senza cancellare nulla in locale
+                await resetSyncState();
+            }
+            const name = DRIVE_FOLDER_NAME.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            const q = encodeURIComponent(`name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+            const r = await driveFetch(`${DRIVE_API}/files?q=${q}&fields=files(id)&spaces=drive`);
+            const j = await r.json();
+            if (j.files && j.files.length) {
+                id = j.files[0].id;
+            } else {
+                const c = await driveFetch(`${DRIVE_API}/files?fields=id`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' })
+                });
+                id = (await c.json()).id;
+            }
+            await metaSet('driveFolderId', id);
+            return id;
+        }
+
+        async function listRemote(folderId) {
+            const out = [];
+            let pageToken = '';
+            const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
+            do {
+                const r = await driveFetch(`${DRIVE_API}/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,appProperties)` +
+                    (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''));
+                const j = await r.json();
+                out.push(...(j.files || []));
+                pageToken = j.nextPageToken || '';
+            } while (pageToken);
+            return out;
+        }
+
+        function driveFileName(card) {
+            const label = (card.company || card.personName || 'Biglietto').replace(/[\\/:*?"<>|]/g, '').trim().slice(0, 60);
+            return `${label} (${card.id}).json`;
+        }
+
+        async function uploadCard(card, folderId, fileId) {
+            const meta = {
+                name: driveFileName(card),
+                mimeType: 'application/json',
+                appProperties: { cardId: String(card.id), updatedAt: String(card.updatedAt || 0) }
+            };
+            if (!fileId) meta.parents = [folderId];
+            const boundary = 'cardscanner' + Math.random().toString(36).slice(2);
+            const body = new Blob([
+                `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+                JSON.stringify(meta),
+                `\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+                JSON.stringify(stripSync(card)),
+                `\r\n--${boundary}--`
+            ]);
+            const url = fileId
+                ? `${DRIVE_UPLOAD}/files/${fileId}?uploadType=multipart&fields=id`
+                : `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id`;
+            const r = await driveFetch(url, {
+                method: fileId ? 'PATCH' : 'POST',
+                headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+                body
+            });
+            return (await r.json()).id;
+        }
+
+        async function downloadCard(fileId) {
+            const r = await driveFetch(`${DRIVE_API}/files/${fileId}?alt=media`);
+            return r.json();
+        }
+
+        // Le eliminazioni finiscono nel Cestino di Drive (recuperabili per 30 giorni)
+        async function trashRemote(fileId) {
+            await driveFetch(`${DRIVE_API}/files/${fileId}?fields=id`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trashed: true })
+            });
+        }
+
+        async function runPool(items, limit, fn) {
+            let i = 0;
+            const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+                while (i < items.length) {
+                    const idx = i++;
+                    await fn(items[idx], idx);
+                }
+            });
+            await Promise.all(workers);
+        }
+
+        function askConfirm(title, message, okLabel, cancelLabel) {
+            return new Promise(resolve => {
+                showDialog({
+                    title, message,
+                    onDismiss: () => resolve(false),
+                    buttons: [
+                        { label: cancelLabel, style: 'secondary', onClick: () => resolve(false) },
+                        { label: okLabel, style: 'danger', onClick: () => resolve(true) }
+                    ]
+                });
+            });
+        }
+
+        async function addPendingDeletes(driveIds) {
+            const ids = driveIds.filter(Boolean);
+            if (!ids.length) return;
+            const pending = (await metaGet('pendingDeletes')) || [];
+            await metaSet('pendingDeletes', [...new Set([...pending, ...ids])]);
+        }
+
+        function scheduleSync(delay = 2500) {
+            if (!driveEnabled()) return;
+            clearTimeout(syncTimer);
+            syncTimer = setTimeout(() => syncNow(false), delay);
+        }
+
+        async function syncNow(interactive = false) {
+            if (!driveEnabled()) return;
+            if (syncRunning) { syncQueued = true; return; }
+
+            if (!tokenValid()) {
+                if (!interactive) {
+                    setDriveState((await metaGet('driveConnected')) ? 'needs-auth' : 'disconnected');
+                    return;
+                }
+                try {
+                    await requestToken(); // nessun await prima di questa riga: serve il tocco dell'utente
+                } catch (e) {
+                    setDriveState((await metaGet('driveConnected')) ? 'needs-auth' : 'disconnected');
+                    showToast('Google Drive: ' + e.message, 'warning');
+                    return;
+                }
+            }
+
+            syncRunning = true;
+            setDriveState('syncing');
+            const touched = new Set();
+            let removals = [];
+            let failures = 0, downloaded = 0, uploaded = 0;
+
+            try {
+                const folderId = await ensureFolder();
+                await metaSet('driveConnected', true);
+
+                // 1. Eliminazioni fatte su questo dispositivo
+                const pending = (await metaGet('pendingDeletes')) || [];
+                const stillPending = [];
+                await runPool(pending, 4, async fid => {
+                    try { await trashRemote(fid); }
+                    catch (e) { if (e.auth) throw e; if (e.status !== 404) stillPending.push(fid); }
+                });
+                await metaSet('pendingDeletes', stillPending);
+
+                // 2. Confronto locale / Drive
+                const remote = await listRemote(folderId);
+                const remoteByCard = new Map();
+                remote.forEach(f => {
+                    const cid = f.appProperties && f.appProperties.cardId;
+                    if (cid && !stillPending.includes(f.id)) remoteByCard.set(cid, f);
+                });
+
+                const downloads = [], uploads = [];
+                const localIds = new Set();
+                cardsData.forEach(card => {
+                    if (isDemo(card)) return;
+                    localIds.add(card.id);
+                    const f = remoteByCard.get(card.id);
+                    const localUpd = card.updatedAt || 0;
+                    if (f) {
+                        const remUpd = Number(f.appProperties.updatedAt) || 0;
+                        if (remUpd > localUpd) downloads.push(f);
+                        else if (localUpd > remUpd) uploads.push({ id: card.id, fileId: f.id });
+                        else if (card._driveId !== f.id || card._syncedAt !== localUpd) {
+                            card._driveId = f.id; card._syncedAt = localUpd; touched.add(card.id);
+                        }
+                    } else if (card._driveId) {
+                        if (localUpd > (card._syncedAt || 0)) {
+                            uploads.push({ id: card.id, fileId: null }); // eliminato altrove ma modificato qui: lo tengo
+                        } else {
+                            removals.push(card.id);      // era su Drive ed è stato eliminato altrove
+                        }
+                    } else {
+                        uploads.push({ id: card.id, fileId: null }); // nuovo, mai caricato
+                    }
+                });
+                remoteByCard.forEach((f, cid) => { if (!localIds.has(cid)) downloads.push(f); });
+
+                // Protezione: tante eliminazioni tutte insieme → chiedo conferma
+                if (removals.length >= 5 && removals.length > cardsData.length * 0.3) {
+                    const ok = await askConfirm(
+                        'Biglietti eliminati da Drive',
+                        `${removals.length} biglietti non sono più nella cartella di Google Drive (forse sono stati cancellati da lì). Vuoi eliminarli anche da questo dispositivo? Se scegli "Tienili" verranno ricaricati su Drive.`,
+                        'Elimina anche qui', 'Tienili'
+                    );
+                    if (!ok) {
+                        removals.forEach(id => {
+                            const c = cardsData.find(x => x.id === id);
+                            if (c) { delete c._driveId; delete c._syncedAt; touched.add(id); uploads.push({ id, fileId: null }); }
+                        });
+                        removals = [];
+                    }
+                }
+                if (removals.length) {
+                    const rm = new Set(removals);
+                    cardsData = cardsData.filter(c => !rm.has(c.id));
+                }
+
+                // 3. Scarico e carico
+                const total = downloads.length + uploads.length;
+                let done = 0;
+                const tick = () => { done++; setDriveState('syncing', total > 3 ? `${done}/${total}` : ''); };
+
+                await runPool(downloads, 4, async f => {
+                    try {
+                        const data = await downloadCard(f.id);
+                        if (data && data.id) {
+                            const c = { ...stripSync(data), _driveId: f.id, _syncedAt: data.updatedAt || 0 };
+                            const i = cardsData.findIndex(x => x.id === c.id);
+                            if (i >= 0) { if ((cardsData[i].updatedAt || 0) <= (c.updatedAt || 0)) cardsData[i] = c; }
+                            else cardsData.push(c);
+                            touched.add(c.id);
+                            downloaded++;
+                        }
+                    } catch (e) { if (e.auth) throw e; failures++; }
+                    tick();
+                });
+
+                await runPool(uploads, 3, async u => {
+                    const card = cardsData.find(c => c.id === u.id);
+                    if (card) {
+                        const upd = card.updatedAt || 0;
+                        try {
+                            const newId = await uploadCard(card, folderId, u.fileId);
+                            const cur = cardsData.find(c => c.id === u.id);
+                            if (cur) {
+                                cur._driveId = newId;
+                                if ((cur.updatedAt || 0) === upd) cur._syncedAt = upd;
+                                touched.add(u.id);
+                            }
+                            uploaded++;
+                        } catch (e) { if (e.auth) throw e; failures++; }
+                    }
+                    tick();
+                });
+
+                await metaSet('lastSyncAt', Date.now());
+                setDriveState(failures ? 'error' : 'ok');
+                if (failures) showToast(`${failures} biglietti non sincronizzati, riprovo alla prossima sincronizzazione.`, 'warning');
+                else if (interactive || downloaded || removals.length) {
+                    const parts = [];
+                    if (downloaded) parts.push(`${downloaded} scaricati`);
+                    if (uploaded) parts.push(`${uploaded} caricati`);
+                    if (removals.length) parts.push(`${removals.length} eliminati`);
+                    showToast('Google Drive aggiornato' + (parts.length ? ': ' + parts.join(', ') : '') + '.', 'success');
+                }
+            } catch (e) {
+                console.error('Sincronizzazione Drive:', e);
+                if (e.auth) {
+                    setDriveState('needs-auth');
+                    if (interactive) showToast('Accesso a Google scaduto: tocca di nuovo il pulsante Drive.', 'warning');
+                } else {
+                    setDriveState('error');
+                    showToast('Sincronizzazione con Drive non riuscita: ' + e.message + '. I dati restano salvati su questo dispositivo.', 'warning');
+                }
+            } finally {
+                // Salvo in locale tutto ciò che è cambiato, anche se la sincronizzazione si è interrotta
+                try {
+                    const toPut = [...touched].map(id => cardsData.find(c => c.id === id)).filter(Boolean);
+                    if (toPut.length) await storePutMany(toPut);
+                    if (removals.length) await storeDeleteMany(removals);
+                } catch (e) { console.error(e); }
+                if (touched.size || removals.length) refreshAll();
+                else checkBackupReminder();
+                syncRunning = false;
+                if (syncQueued) { syncQueued = false; scheduleSync(500); }
+            }
+        }
+
+        function setDriveState(state, extra = '') {
+            driveState = state;
+            const chip = document.getElementById('driveChip');
+            if (state === 'off') { chip.classList.add('hidden'); chip.classList.remove('flex'); return; }
+            chip.classList.remove('hidden');
+            chip.classList.add('flex');
+            const icon = document.getElementById('driveChipIcon');
+            const text = document.getElementById('driveChipText');
+            const map = {
+                'disconnected': ['ph-bold ph-google-drive-logo text-sky-400', 'Collega Google Drive'],
+                'needs-auth': ['ph-bold ph-arrows-clockwise text-amber-400', 'Tocca per sincronizzare'],
+                'syncing': ['ph-bold ph-arrows-clockwise text-sky-400 animate-spin', 'Sincronizzo' + (extra ? ' ' + extra : '...')],
+                'ok': ['ph-bold ph-check-circle text-emerald-400', 'Drive aggiornato'],
+                'error': ['ph-bold ph-warning text-red-400', 'Drive: riprova']
+            };
+            const [cls, label] = map[state] || map.disconnected;
+            icon.className = cls + ' text-lg';
+            text.textContent = label;
+        }
+
+        async function onDriveChipClick() {
+            if (driveState === 'syncing') { showToast('Sincronizzazione già in corso.', 'info'); return; }
+            if (driveState === 'ok') {
+                const last = Number(await metaGet('lastSyncAt')) || 0;
+                showDialog({
+                    title: 'Google Drive',
+                    message: `I biglietti sono salvati nella cartella "${DRIVE_FOLDER_NAME}" del tuo Google Drive, un file per biglietto. Ultima sincronizzazione: ${last ? relativeTime(last) : 'mai'}.`,
+                    buttons: [
+                        { label: 'Scollega', style: 'secondary', onClick: confirmDisconnectDrive },
+                        { label: 'Chiudi', style: 'secondary' },
+                        { label: 'Sincronizza ora', style: 'primary', onClick: () => syncNow(true) }
+                    ]
+                });
+                return;
+            }
+            syncNow(true);
+        }
+
+        function confirmDisconnectDrive() {
+            showConfirm('Scollegare Google Drive?',
+                'I biglietti restano sia su questo dispositivo sia su Drive, ma le modifiche future non verranno più sincronizzate da qui.',
+                async () => {
+                    try { if (gToken && window.google) google.accounts.oauth2.revoke(gToken, () => {}); } catch (e) {}
+                    clearToken();
+                    await resetSyncState();
+                    await metaSet('driveConnected', false);
+                    await metaSet('lastSyncAt', 0);
+                    setDriveState('disconnected');
+                    checkBackupReminder();
+                    showToast('Google Drive scollegato.', 'info');
+                }, { okText: 'Scollega', danger: true });
+        }
+
+        async function initDrive() {
+            if (!driveEnabled()) { setDriveState('off'); return; }
+            restoreToken();
+            loadGis().then(initTokenClient).catch(() => {});
+            const connected = await metaGet('driveConnected');
+            if (connected && tokenValid()) syncNow(false);
+            else setDriveState(connected ? 'needs-auth' : 'disconnected');
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && tokenValid()) scheduleSync(800);
+            });
+            window.addEventListener('online', () => { if (tokenValid()) scheduleSync(800); });
+        }
+
+        function relativeTime(ts) {
+            const min = Math.floor((Date.now() - ts) / 60000);
+            if (min < 1) return 'adesso';
+            if (min < 60) return `${min} min fa`;
+            const h = Math.floor(min / 60);
+            if (h < 24) return h === 1 ? "un'ora fa" : `${h} ore fa`;
+            return relativeDays(ts);
+        }
+
+        /* =====================================================================
+           UTILITÀ
+           ===================================================================== */
+        function downloadFile(content, fileName, contentType) {
+            const blob = new Blob([content], { type: contentType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1500);
+        }
+
+        function getTimestamp() {
+            const d = new Date();
+            const p = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+            return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+        }
+
+        function slugify(s) {
+            return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase().slice(0, 40) || 'biglietto';
+        }
+
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+    </script>
+</body>
+</html>
